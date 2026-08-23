@@ -1102,45 +1102,56 @@ else:
     comb = [(i, None) for i in flex(ida0, fi)]
 
 
+
 st.markdown('<div id="buscador"></div>', unsafe_allow_html=True)
-_hero_b64 = _ftt_b64(BASE / "assets" / "hero_aviao_moderno.png")
-if _hero_b64:
+
+hero_left, hero_right = st.columns([1.05, 0.95], gap="large")
+
+with hero_left:
     st.markdown(
-        f"""
-        <div class="fttHero2">
-          <div class="inner">
-            <div class="copy">
-              <h1>Buscador Inteligente<br><span>de Passagens</span></h1>
-              <p>Pesquise voos, acompanhe preços e compare dinheiro com milhas.</p>
-              <div class="features">
-                <div class="fttFeature">
-                  <div class="ico">1</div>
-                  <div><strong>Encontre</strong><small>as melhores opções</small></div>
-                </div>
-                <div class="fttFeature">
-                  <div class="ico">2</div>
-                  <div><strong>Compare</strong><small>preços e datas</small></div>
-                </div>
-                <div class="fttFeature">
-                  <div class="ico">3</div>
-                  <div><strong>Analise</strong><small>uso de milhas</small></div>
-                </div>
-                <div class="fttFeature">
-                  <div class="ico">4</div>
-                  <div><strong>Planeje</strong><small>sua próxima viagem</small></div>
-                </div>
-              </div>
+        """
+        <div style="
+            background:linear-gradient(135deg,#ffffff 0%,#f3f8ff 100%);
+            border:1px solid #dfe7f0;
+            border-radius:20px;
+            padding:28px 30px 24px;
+            min-height:300px;
+            box-shadow:0 10px 28px rgba(8,34,74,.05);
+        ">
+          <div style="font-size:42px;line-height:1.02;font-weight:850;color:#0a1f4d;letter-spacing:-0.04em;">
+            Buscador Inteligente<br>
+            <span style="color:#087CF0;">de Passagens</span>
+          </div>
+          <div style="font-size:17px;color:#607089;margin-top:14px;line-height:1.45;">
+            Pesquise voos, acompanhe preços e compare dinheiro com milhas.
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:24px;">
+            <div style="background:#fff;border:1px solid #dfe7f0;border-radius:12px;padding:10px 12px;">
+              <b style="color:#0a1f4d;">Encontre</b><br><span style="color:#718096;font-size:13px;">as melhores opções</span>
             </div>
-            <div class="visual" style="background-image:url('data:image/png;base64,{_hero_b64}')"></div>
+            <div style="background:#fff;border:1px solid #dfe7f0;border-radius:12px;padding:10px 12px;">
+              <b style="color:#0a1f4d;">Compare</b><br><span style="color:#718096;font-size:13px;">preços e datas</span>
+            </div>
+            <div style="background:#fff;border:1px solid #dfe7f0;border-radius:12px;padding:10px 12px;">
+              <b style="color:#0a1f4d;">Analise</b><br><span style="color:#718096;font-size:13px;">uso de milhas</span>
+            </div>
+            <div style="background:#fff;border:1px solid #dfe7f0;border-radius:12px;padding:10px 12px;">
+              <b style="color:#0a1f4d;">Planeje</b><br><span style="color:#718096;font-size:13px;">sua próxima viagem</span>
+            </div>
           </div>
         </div>
         """,
         unsafe_allow_html=True
     )
-else:
-    st.markdown("## Buscador Inteligente de Passagens")
-    st.caption("Pesquise voos, acompanhe preços e compare dinheiro com milhas.")
 
+with hero_right:
+    hero_path = BASE / "assets" / "hero_aviao_moderno.png"
+    if hero_path.exists():
+        st.image(str(hero_path), width="stretch")
+    else:
+        st.info("Imagem principal não encontrada em assets/hero_aviao_moderno.png.")
+
+st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 st.subheader("1. Pesquisa de passagens em dinheiro")
 st.info(
     f"A pesquisa pode consumir no máximo **{len(comb)} consulta(s)** novas. "
