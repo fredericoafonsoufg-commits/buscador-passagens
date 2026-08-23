@@ -13,6 +13,17 @@ except Exception:
 import requests
 import streamlit as st
 import base64
+from io import BytesIO
+import matplotlib.pyplot as plt
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER, TA_LEFT
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import mm
+from reportlab.platypus import (
+    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
+    Image as RLImage, PageBreak, KeepTogether
+)
 
 st.set_page_config(
     page_title="Frederico Travel Tools",
@@ -468,12 +479,10 @@ def grafico_historico_google_style(df, preco_atual=None):
     )
 
 st.title("✈️ Buscador Inteligente de Passagens")
-st.caption("Versão 11.6 Web — busca corrigida por cidade/código + histórico + milhas + tabela fixa")
+st.caption("Frederico Travel Tools · Relatório completo de pesquisa, preços e milhas")
 
-if api_key():
-    st.success("SerpApi conectada.")
-else:
-    st.error("SERPAPI_API_KEY não encontrada.")
+if not api_key():
+    st.error("Serviço de pesquisa indisponível. Verifique a configuração do aplicativo.")
 
 
 
@@ -613,9 +622,9 @@ def campo_aeroporto_inteligente(titulo, key_prefix):
         default=[],
         format_func=rotulo_aeroporto,
         key=f"{key_prefix}_aeroportos",
-        placeholder="Digite cidade ou código IATA",
+        placeholder="Digite a cidade ou aeroporto",
         help=(
-            "Digite no próprio campo o nome da cidade ou o código do aeroporto. "
+            "Digite o nome da cidade ou, se souber, a sigla do aeroporto. "
             "Ex.: Rio de Janeiro, GIG, São Paulo, CGH, Lima, LIM."
         )
     )
@@ -642,14 +651,290 @@ div[data-testid="stMetric"]{background:#fff;border:1px solid var(--line);border-
 .stButton>button{border-radius:12px;min-height:44px;font-weight:650}
 .stButton>button[kind="primary"]{background:linear-gradient(135deg,var(--navy),var(--blue));border:0}
 div[data-baseweb="input"],div[data-baseweb="select"]{border-radius:12px}
-.fttHero{background:#fff;border:1px solid var(--line);border-radius:20px;padding:14px 20px;margin-bottom:18px;box-shadow:0 8px 28px rgba(8,34,74,.05)}
-.fttHero img{display:block;width:min(720px,100%);margin:auto}
+.fttHero{background:#fff;border:1px solid var(--line);border-radius:20px;padding:18px 22px;margin:4px 0 22px;box-shadow:0 8px 28px rgba(8,34,74,.05);overflow:visible}
+.fttHero img{display:block;width:min(560px,92%);height:auto;margin:auto;object-fit:contain}
 .fttFooter{margin-top:38px;padding:20px 4px 8px;border-top:1px solid var(--line);text-align:center;color:#718096;font-size:.88rem}
 </style>
 """,unsafe_allow_html=True)
 _logo=_ftt_b64(BASE/"assets"/"frederico_travel_tools_logo.png")
 if _logo:
     st.markdown(f'<div class="fttHero"><img src="data:image/png;base64,{_logo}"></div>',unsafe_allow_html=True)
+
+
+def _pdf_safe(v):
+    if v is None:
+        return "-"
+    return str(v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+def _pdf_money(v):
+    try:
+        return brl(float(v))
+    except Exception:
+        return "-"
+
+def _pdf_chart_history(df, preco_atual=None):
+    if df is None or df.empty:
+        return None
+    g = df.copy()
+    if "Data" not in g.columns:
+        g = g.reset_index()
+        if "index" in g.columns:
+            g = g.rename(columns={"index": "Data"})
+    if "Preço (R$)" not in g.columns:
+        return None
+    g["Data"] = pd.to_datetime(g["Data"], errors="coerce")
+    g["Preço (R$)"] = pd.to_numeric(g["Preço (R$)"], errors="coerce")
+    g = g.dropna(subset=["Data", "Preço (R$)"]).sort_values("Data")
+    if g.empty:
+        return None
+
+    fig, ax = plt.subplots(figsize=(9.5, 3.5))
+    ax.plot(g["Data"], g["Preço (R$)"], linewidth=2.4, marker="o", markersize=4)
+    ax.fill_between(g["Data"], g["Preço (R$)"], g["Preço (R$)"].min()*0.98, alpha=.10)
+    if preco_atual:
+        ax.axhline(float(preco_atual), linestyle="--", linewidth=1.4, label="Preço atual")
+    ax.set_ylabel("Preço (R$)")
+    ax.grid(axis="y", alpha=.20)
+    ax.spines[["top","right"]].set_visible(False)
+    fig.autofmt_xdate(rotation=0)
+    fig.tight_layout()
+    buf = BytesIO()
+    fig.savefig(buf, format="png", dpi=180, bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+def gerar_relatorio_pdf(contexto):
+    buf = BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=landscape(A4),
+        rightMargin=13*mm, leftMargin=13*mm,
+        topMargin=12*mm, bottomMargin=13*mm,
+        title="Frederico Travel Tools - Relatório de Pesquisa"
+    )
+
+    styles = getSampleStyleSheet()
+    navy = colors.HexColor("#08224A")
+    blue = colors.HexColor("#0B84F3")
+    light = colors.HexColor("#F4F7FB")
+    line = colors.HexColor("#DFE7F0")
+    gray = colors.HexColor("#617087")
+
+    h1 = ParagraphStyle("FTTH1", parent=styles["Heading1"], fontName="Helvetica-Bold",
+                        fontSize=20, leading=24, textColor=navy, spaceAfter=6)
+    h2 = ParagraphStyle("FTTH2", parent=styles["Heading2"], fontName="Helvetica-Bold",
+                        fontSize=14, leading=18, textColor=navy, spaceBefore=8, spaceAfter=7)
+    body = ParagraphStyle("FTTBody", parent=styles["BodyText"], fontName="Helvetica",
+                          fontSize=8.6, leading=12, textColor=colors.HexColor("#26364A"))
+    small = ParagraphStyle("FTTSmall", parent=body, fontSize=7.4, leading=9, textColor=gray)
+    center = ParagraphStyle("FTTCenter", parent=body, alignment=TA_CENTER)
+    story = []
+
+    logo_file = BASE / "assets" / "frederico_travel_tools_logo.png"
+    if logo_file.exists():
+        story.append(RLImage(str(logo_file), width=105*mm, height=31*mm))
+        story.append(Spacer(1, 2*mm))
+
+    story.append(Paragraph("Relatório completo da pesquisa de passagens", h1))
+    story.append(Paragraph(
+        f"Gerado em {datetime.now().strftime('%d/%m/%Y às %H:%M')} · Desenvolvido por Frederico Afonso Farias",
+        small
+    ))
+    story.append(Spacer(1, 4*mm))
+
+    # Resumo da pesquisa
+    story.append(Paragraph("1. Resumo da pesquisa", h2))
+    dados = [
+        ["Origem", contexto.get("origem","-"), "Destino", contexto.get("destino","-")],
+        ["Tipo", contexto.get("tipo","-"), "Cabine", contexto.get("cabine","-")],
+        ["Ida", contexto.get("ida","-"), "Volta", contexto.get("volta","-")],
+        ["Adultos", str(contexto.get("adultos","-")), "Conexões", contexto.get("conexoes","-")],
+    ]
+    t = Table(dados, colWidths=[27*mm, 70*mm, 27*mm, 70*mm])
+    t.setStyle(TableStyle([
+        ("BACKGROUND",(0,0),(-1,-1),colors.white),
+        ("BOX",(0,0),(-1,-1),.5,line),
+        ("INNERGRID",(0,0),(-1,-1),.35,line),
+        ("FONTNAME",(0,0),(-1,-1),"Helvetica"),
+        ("FONTNAME",(0,0),(0,-1),"Helvetica-Bold"),
+        ("FONTNAME",(2,0),(2,-1),"Helvetica-Bold"),
+        ("TEXTCOLOR",(0,0),(0,-1),navy),("TEXTCOLOR",(2,0),(2,-1),navy),
+        ("FONTSIZE",(0,0),(-1,-1),8.5),
+        ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
+        ("LEFTPADDING",(0,0),(-1,-1),6),("RIGHTPADDING",(0,0),(-1,-1),6),
+        ("TOPPADDING",(0,0),(-1,-1),6),("BOTTOMPADDING",(0,0),(-1,-1),6),
+    ]))
+    story.append(t)
+    story.append(Spacer(1, 4*mm))
+
+    # Resultados de voos
+    voos = contexto.get("voos") or []
+    story.append(Paragraph("2. Resultados em dinheiro", h2))
+    if voos:
+        menor = min(float(x.get("Preço (R$)", 0) or 0) for x in voos)
+        story.append(Paragraph(f"Menor preço encontrado: <b>{_pdf_money(menor)}</b>", body))
+        story.append(Spacer(1, 2*mm))
+        cols = ["Preço (R$)","Companhia(s)","Origem","Destino","Saída ida","Chegada ida","Escalas","Duração ida","Voos"]
+        header = ["Preço","Companhia","Orig.","Dest.","Saída","Chegada","Esc.","Duração","Voo(s)"]
+        rows_pdf = [header]
+        for x in voos[:20]:
+            rows_pdf.append([
+                _pdf_money(x.get("Preço (R$)")),
+                _pdf_safe(x.get("Companhia(s)")),
+                _pdf_safe(x.get("Origem")),
+                _pdf_safe(x.get("Destino")),
+                _pdf_safe(x.get("Saída ida")),
+                _pdf_safe(x.get("Chegada ida")),
+                _pdf_safe(x.get("Escalas")),
+                _pdf_safe(x.get("Duração ida")),
+                _pdf_safe(x.get("Voos")),
+            ])
+        tab = Table(rows_pdf, repeatRows=1, colWidths=[22*mm,42*mm,15*mm,15*mm,31*mm,31*mm,12*mm,22*mm,32*mm])
+        tab.setStyle(TableStyle([
+            ("BACKGROUND",(0,0),(-1,0),navy),("TEXTCOLOR",(0,0),(-1,0),colors.white),
+            ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),
+            ("FONTSIZE",(0,0),(-1,-1),7.1),
+            ("GRID",(0,0),(-1,-1),.3,line),
+            ("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white, light]),
+            ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
+            ("LEFTPADDING",(0,0),(-1,-1),3),("RIGHTPADDING",(0,0),(-1,-1),3),
+            ("TOPPADDING",(0,0),(-1,-1),4),("BOTTOMPADDING",(0,0),(-1,-1),4),
+        ]))
+        story.append(tab)
+    else:
+        story.append(Paragraph("Nenhuma pesquisa de voo foi executada nesta sessão.", body))
+
+    # Histórico
+    story.append(PageBreak())
+    story.append(Paragraph("3. Histórico de preços", h2))
+    hist = contexto.get("historico")
+    if hist is not None and not hist.empty:
+        chart = _pdf_chart_history(hist, contexto.get("preco_atual"))
+        if chart:
+            story.append(RLImage(chart, width=230*mm, height=82*mm))
+        vals = pd.to_numeric(hist["Preço (R$)"], errors="coerce").dropna()
+        if not vals.empty:
+            metrics = [
+                ["Preço atual", _pdf_money(contexto.get("preco_atual")),
+                 "Média", _pdf_money(vals.mean()),
+                 "Menor", _pdf_money(vals.min()),
+                 "Maior", _pdf_money(vals.max())]
+            ]
+            mt = Table(metrics, colWidths=[24*mm,30*mm]*4)
+            mt.setStyle(TableStyle([
+                ("BOX",(0,0),(-1,-1),.5,line),("INNERGRID",(0,0),(-1,-1),.3,line),
+                ("BACKGROUND",(0,0),(-1,-1),colors.white),
+                ("FONTNAME",(0,0),(-1,-1),"Helvetica"),
+                ("FONTNAME",(0,0),(0,0),"Helvetica-Bold"),
+                ("FONTNAME",(2,0),(2,0),"Helvetica-Bold"),
+                ("FONTNAME",(4,0),(4,0),"Helvetica-Bold"),
+                ("FONTNAME",(6,0),(6,0),"Helvetica-Bold"),
+                ("TEXTCOLOR",(0,0),(-1,-1),navy),
+                ("FONTSIZE",(0,0),(-1,-1),8),
+                ("ALIGN",(1,0),(-1,-1),"CENTER"),
+                ("TOPPADDING",(0,0),(-1,-1),6),("BOTTOMPADDING",(0,0),(-1,-1),6),
+            ]))
+            story.append(mt)
+    else:
+        story.append(Paragraph("Ainda não há histórico suficiente para esta pesquisa.", body))
+
+    # Milhas e comparador
+    story.append(Spacer(1, 5*mm))
+    story.append(Paragraph("4. Saldos e comparação com milhas", h2))
+    saldos = contexto.get("saldos", {})
+    saldo_tbl = Table([
+        ["LATAM Pass","Smiles","Azul Fidelidade"],
+        [pts(saldos.get("LATAM Pass",0)), pts(saldos.get("Smiles",0)), pts(saldos.get("Azul Fidelidade",0))]
+    ], colWidths=[65*mm]*3)
+    saldo_tbl.setStyle(TableStyle([
+        ("BACKGROUND",(0,0),(-1,0),navy),("TEXTCOLOR",(0,0),(-1,0),colors.white),
+        ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),("ALIGN",(0,0),(-1,-1),"CENTER"),
+        ("BOX",(0,0),(-1,-1),.5,line),("INNERGRID",(0,0),(-1,-1),.3,line),
+        ("FONTSIZE",(0,0),(-1,-1),9),("TOPPADDING",(0,0),(-1,-1),7),("BOTTOMPADDING",(0,0),(-1,-1),7)
+    ]))
+    story.append(saldo_tbl)
+    story.append(Spacer(1, 4*mm))
+
+    comp = contexto.get("ranking_milhas")
+    if comp is not None and not comp.empty:
+        headers = list(comp.columns)
+        rows_comp = [headers]
+        for _, r in comp.iterrows():
+            row = []
+            for c in headers:
+                v = r[c]
+                if c in ("Desembolso imediato","Custo econômico"):
+                    row.append(_pdf_money(v))
+                elif "Milhas" in c or "Saldo" in c:
+                    try: row.append(pts(v))
+                    except: row.append(_pdf_safe(v))
+                else:
+                    row.append(_pdf_safe(v))
+            rows_comp.append(row)
+        widths = [16*mm,44*mm,34*mm,34*mm,29*mm,29*mm,29*mm][:len(headers)]
+        ct = Table(rows_comp, repeatRows=1, colWidths=widths)
+        ct.setStyle(TableStyle([
+            ("BACKGROUND",(0,0),(-1,0),navy),("TEXTCOLOR",(0,0),(-1,0),colors.white),
+            ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),
+            ("GRID",(0,0),(-1,-1),.3,line),
+            ("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white, light]),
+            ("FONTSIZE",(0,0),(-1,-1),7.2),
+            ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
+            ("LEFTPADDING",(0,0),(-1,-1),4),("RIGHTPADDING",(0,0),(-1,-1),4),
+            ("TOPPADDING",(0,0),(-1,-1),5),("BOTTOMPADDING",(0,0),(-1,-1),5),
+        ]))
+        story.append(ct)
+
+    # Tabela fixa
+    fixa = contexto.get("tabela_fixa")
+    if fixa:
+        story.append(Spacer(1, 5*mm))
+        story.append(Paragraph("5. Tabela fixa aplicável", h2))
+        fixa_rows = [
+            ["Programa", fixa.get("programa","-"), "Rota", fixa.get("rota","-")],
+            ["Cabine", fixa.get("cabine","-"), "Milhas por trecho", pts(fixa.get("milhas_trecho",0))],
+            ["Total estimado", pts(fixa.get("total",0)), "Milhas faltantes", pts(fixa.get("faltantes",0))],
+            ["Preço máximo do milheiro", _pdf_money(fixa.get("max_milheiro",0)) + " / 1.000",
+             "Disponibilidade", fixa.get("disponibilidade","-")],
+        ]
+        ft = Table(fixa_rows, colWidths=[38*mm,64*mm,48*mm,64*mm])
+        ft.setStyle(TableStyle([
+            ("BOX",(0,0),(-1,-1),.5,line),("INNERGRID",(0,0),(-1,-1),.3,line),
+            ("ROWBACKGROUNDS",(0,0),(-1,-1),[colors.white, light]),
+            ("FONTNAME",(0,0),(0,-1),"Helvetica-Bold"),
+            ("FONTNAME",(2,0),(2,-1),"Helvetica-Bold"),
+            ("TEXTCOLOR",(0,0),(0,-1),navy),("TEXTCOLOR",(2,0),(2,-1),navy),
+            ("FONTSIZE",(0,0),(-1,-1),8.2),
+            ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
+            ("TOPPADDING",(0,0),(-1,-1),6),("BOTTOMPADDING",(0,0),(-1,-1),6),
+        ]))
+        story.append(ft)
+
+    # Recommendation
+    rec = contexto.get("recomendacao")
+    if rec:
+        story.append(Spacer(1, 5*mm))
+        story.append(Paragraph("6. Recomendação", h2))
+        story.append(Table([[Paragraph(_pdf_safe(rec), body)]], colWidths=[230*mm],
+                           style=TableStyle([
+                               ("BACKGROUND",(0,0),(-1,-1),colors.HexColor("#EAF7EE")),
+                               ("BOX",(0,0),(-1,-1),.6,colors.HexColor("#B9DFC4")),
+                               ("LEFTPADDING",(0,0),(-1,-1),8),("RIGHTPADDING",(0,0),(-1,-1),8),
+                               ("TOPPADDING",(0,0),(-1,-1),8),("BOTTOMPADDING",(0,0),(-1,-1),8),
+                           ])))
+
+    story.append(Spacer(1, 7*mm))
+    story.append(Paragraph(
+        "Preços, disponibilidade, regras dos programas de fidelidade e taxas devem ser confirmados antes da compra ou emissão. "
+        "Frederico Travel Tools - uso informativo e comparativo.",
+        small
+    ))
+
+    doc.build(story)
+    buf.seek(0)
+    return buf.getvalue()
+
 
 with st.sidebar:
     st.markdown("### ✈️ Nova pesquisa")
@@ -1448,6 +1733,98 @@ st.divider()
 st.caption(
     "Preços, disponibilidade e regras dos programas de fidelidade devem ser confirmados antes da compra ou emissão."
 )
+
+
+# -----------------------------------------------------------
+# Relatório completo em PDF
+# -----------------------------------------------------------
+hist_pdf = None
+try:
+    if "graf" in locals() and isinstance(graf, pd.DataFrame) and not graf.empty:
+        hist_pdf = graf.reset_index() if "Data" not in graf.columns else graf.copy()
+    elif "h" in locals() and isinstance(h, pd.DataFrame) and not h.empty:
+        hist_pdf = h.reset_index() if "Data" not in h.columns else h.copy()
+except Exception:
+    hist_pdf = None
+
+tabela_fixa_pdf = None
+try:
+    if regra_fixa:
+        tabela_fixa_pdf = {
+            "programa": regra_fixa.get("programa"),
+            "rota": regra_fixa.get("rota"),
+            "cabine": cabine_fixa if "cabine_fixa" in locals() else cab_pt,
+            "milhas_trecho": fixed_req_trecho if "fixed_req_trecho" in locals() else 0,
+            "total": fixed_req if "fixed_req" in locals() else 0,
+            "faltantes": fixed_missing if "fixed_missing" in locals() else 0,
+            "max_milheiro": max_milheiro if "max_milheiro" in locals() else 0,
+            "disponibilidade": disponibilidade_fixa if "disponibilidade_fixa" in locals() else "Não verificada",
+        }
+except Exception:
+    tabela_fixa_pdf = None
+
+recomendacao_pdf = ""
+try:
+    if ranking:
+        melhor = ranking[0]
+        if melhor["Opção"] == "Dinheiro":
+            recomendacao_pdf = (
+                f"Dinheiro é a opção mais econômica pelos dados informados. "
+                f"Desembolso estimado: {brl(melhor['Desembolso imediato'])}. "
+                f"Custo econômico: {brl(melhor['Custo econômico'])}."
+            )
+        else:
+            recomendacao_pdf = (
+                f"{melhor['Opção']} é a melhor opção pelos dados informados. "
+                f"Desembolso estimado: {brl(melhor['Desembolso imediato'])}. "
+                f"Custo econômico: {brl(melhor['Custo econômico'])}."
+            )
+except Exception:
+    pass
+
+contexto_pdf = {
+    "origem": ", ".join(orig) if orig else "-",
+    "destino": ", ".join(dest) if dest else "-",
+    "tipo": "Ida e volta" if volta0 else "Só ida",
+    "cabine": cab_pt,
+    "ida": data_br(ida0),
+    "volta": data_br(volta0) if volta0 else "-",
+    "adultos": int(adultos),
+    "conexoes": stop_pt,
+    "voos": [{k:v for k,v in x.items() if not k.startswith("_")} for x in rank[:20]] if rank else [],
+    "preco_atual": float(st.session_state.get("preco_ref",0) or 0),
+    "historico": hist_pdf,
+    "saldos": {"LATAM Pass": lat, "Smiles": smi, "Azul Fidelidade": azu},
+    "ranking_milhas": rdf if "rdf" in locals() else None,
+    "tabela_fixa": tabela_fixa_pdf,
+    "recomendacao": recomendacao_pdf,
+}
+
+st.divider()
+st.markdown("### 📄 Relatório completo da pesquisa")
+st.caption(
+    "Baixe um PDF organizado com a marca Frederico Travel Tools, dados da viagem, "
+    "resultados de voos, histórico de preços, gráfico, saldos, comparador de milhas, "
+    "tabela fixa aplicável e recomendação."
+)
+
+if rank:
+    try:
+        pdf_bytes = gerar_relatorio_pdf(contexto_pdf)
+        nome_pdf = f"Frederico_Travel_Tools_{'-'.join(orig) or 'origem'}_{'-'.join(dest) or 'destino'}_{ida0.strftime('%d-%m-%Y')}.pdf"
+        st.download_button(
+            "⬇️ Baixar relatório completo em PDF",
+            data=pdf_bytes,
+            file_name=nome_pdf,
+            mime="application/pdf",
+            type="primary",
+            width="stretch"
+        )
+    except Exception as e:
+        st.warning(f"Não foi possível gerar o PDF nesta sessão: {e}")
+else:
+    st.info("Faça uma pesquisa primeiro. O botão de PDF será liberado após os resultados.")
+
 
 st.markdown("""
 <div class="fttFooter">
