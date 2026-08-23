@@ -12,9 +12,10 @@ except Exception:
     airportsdata = None
 import requests
 import streamlit as st
+import base64
 
 st.set_page_config(
-    page_title="Buscador Inteligente de Passagens",
+    page_title="Frederico Travel Tools",
     page_icon="✈️",
     layout="wide"
 )
@@ -333,7 +334,7 @@ def exigir_senha():
     if st.session_state.get("autenticado"):
         return
 
-    st.title("🔐 Buscador de Passagens")
+    st.subheader("Buscador Inteligente de Passagens")
     st.caption("Acesso privado")
 
     senha_digitada = st.text_input("Senha", type="password")
@@ -467,7 +468,7 @@ def grafico_historico_google_style(df, preco_atual=None):
     )
 
 st.title("✈️ Buscador Inteligente de Passagens")
-st.caption("Versão 11.5 Web — campo único de cidade/aeroporto + histórico + milhas + tabela fixa")
+st.caption("Versão 11.6 Web — busca corrigida por cidade/código + histórico + milhas + tabela fixa")
 
 if api_key():
     st.success("SerpApi conectada.")
@@ -523,6 +524,18 @@ def carregar_aeroportos():
 
 AEROPORTOS_MUNDO = carregar_aeroportos()
 
+# Ajustes de área metropolitana para a experiência de busca.
+# Ex.: VCP fica em Campinas, mas é frequentemente considerado uma opção para São Paulo.
+ALIASES_CIDADE = {
+    "GRU": ["São Paulo"],
+    "CGH": ["São Paulo"],
+    "VCP": ["São Paulo", "Campinas"],
+    "GIG": ["Rio de Janeiro"],
+    "SDU": ["Rio de Janeiro"],
+    "EZE": ["Buenos Aires"],
+    "AEP": ["Buenos Aires"],
+}
+
 def buscar_aeroportos_inteligente(termo, limite=12):
     termo = (termo or "").strip()
     if not termo:
@@ -567,8 +580,11 @@ def buscar_aeroportos_inteligente(termo, limite=12):
 
 def rotulo_aeroporto(a):
     cidade = a["cidade"] or "Cidade não informada"
+    codigo = a["codigo"]
     pais = f" · {a['pais']}" if a.get("pais") else ""
-    return f"{cidade} — {a['codigo']} — {a['nome']}{pais}"
+    aliases = [x for x in ALIASES_CIDADE.get(codigo, []) if x.casefold() != cidade.casefold()]
+    alias_txt = f" · atende {', '.join(aliases)}" if aliases else ""
+    return f"{cidade} — {codigo}{pais}{alias_txt}"
 
 
 def agrupar_resultados_aeroportos(resultados):
@@ -580,7 +596,16 @@ def agrupar_resultados_aeroportos(resultados):
 
 
 def campo_aeroporto_inteligente(titulo, key_prefix):
-    opcoes = AEROPORTOS_MUNDO
+    prioridade = {
+        "GRU": 1, "CGH": 2, "VCP": 3,
+        "GIG": 4, "SDU": 5,
+        "EZE": 6, "AEP": 7,
+        "GYN": 8, "BSB": 9, "LIM": 10
+    }
+    opcoes = sorted(
+        AEROPORTOS_MUNDO,
+        key=lambda a: (prioridade.get(a["codigo"], 9999), a["cidade"], a["codigo"])
+    )
 
     escolhidos = st.multiselect(
         titulo,
@@ -601,9 +626,34 @@ def campo_aeroporto_inteligente(titulo, key_prefix):
     codigos = [a["codigo"] for a in escolhidos]
     return ",".join(codigos)
 
+
+def _ftt_b64(p):
+    try: return base64.b64encode(Path(p).read_bytes()).decode()
+    except Exception: return ""
+
+st.markdown("""
+<style>
+:root{--navy:#08224a;--blue:#0b84f3;--bg:#f7f9fc;--line:#e5ebf3}
+.stApp{background:var(--bg)}
+.block-container{padding-top:1.25rem;max-width:1480px}
+[data-testid="stSidebar"]{background:#fff;border-right:1px solid var(--line)}
+h1,h2,h3{color:var(--navy);letter-spacing:-.025em}
+div[data-testid="stMetric"]{background:#fff;border:1px solid var(--line);border-radius:16px;padding:14px 16px;box-shadow:0 5px 18px rgba(8,34,74,.04)}
+.stButton>button{border-radius:12px;min-height:44px;font-weight:650}
+.stButton>button[kind="primary"]{background:linear-gradient(135deg,var(--navy),var(--blue));border:0}
+div[data-baseweb="input"],div[data-baseweb="select"]{border-radius:12px}
+.fttHero{background:#fff;border:1px solid var(--line);border-radius:20px;padding:14px 20px;margin-bottom:18px;box-shadow:0 8px 28px rgba(8,34,74,.05)}
+.fttHero img{display:block;width:min(720px,100%);margin:auto}
+.fttFooter{margin-top:38px;padding:20px 4px 8px;border-top:1px solid var(--line);text-align:center;color:#718096;font-size:.88rem}
+</style>
+""",unsafe_allow_html=True)
+_logo=_ftt_b64(BASE/"assets"/"frederico_travel_tools_logo.png")
+if _logo:
+    st.markdown(f'<div class="fttHero"><img src="data:image/png;base64,{_logo}"></div>',unsafe_allow_html=True)
+
 with st.sidebar:
-    st.header("Pesquisa aérea")
-    st.caption("Digite cidade ou código IATA no mesmo campo.")
+    st.markdown("### ✈️ Nova pesquisa")
+    st.caption("Origem, destino e datas em poucos passos.")
 
     orig_txt = campo_aeroporto_inteligente(
         "Origem",
@@ -1398,3 +1448,10 @@ st.divider()
 st.caption(
     "Preços, disponibilidade e regras dos programas de fidelidade devem ser confirmados antes da compra ou emissão."
 )
+
+st.markdown("""
+<div class="fttFooter">
+<strong>Frederico Travel Tools</strong> · Planeje. Compare. Viaje melhor.<br>
+Desenvolvido por Frederico Afonso Farias · © 2026
+</div>
+""",unsafe_allow_html=True)
