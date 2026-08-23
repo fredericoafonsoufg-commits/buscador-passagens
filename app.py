@@ -205,21 +205,36 @@ def fixed_table_rule(origens, destinos):
         return {
             "programa": "LATAM Pass",
             "rota": "Brasil ↔ Argentina",
-            "por_trecho": 24000,
-            "ida_volta": 48000,
+            "tabelas_cabine": {
+                "Econômica": {
+                    "milhas_por_trecho": 24000,
+                    "url": "https://latampass.latam.com/pt_br/viagem/usar-milhas-para-voar/regras-de-resgate/latam/classe-economica"
+                },
+                "Premium Economy": {
+                    "milhas_por_trecho": 43200,
+                    "url": "https://latampass.latam.com/pt_br/viagem/usar-milhas-para-voar/regras-de-resgate/latam/classe-premium-economy"
+                },
+                "Executiva": {
+                    "milhas_por_trecho": 48000,
+                    "url": "https://latampass.latam.com/pt_br/viagem/usar-milhas-para-voar/regras-de-resgate/latam/classe-executiva"
+                },
+                "Primeira Classe": {
+                    "milhas_por_trecho": 84000,
+                    "url": "https://latampass.latam.com/pt_br/viagem/usar-milhas-para-voar/regras-de-resgate/latam/primeira-classe"
+                }
+            },
             "tipo_verificacao": "whatsapp",
             "contato_label": "📱 Verificar disponibilidade no WhatsApp LATAM",
             "contato_base": "https://api.whatsapp.com/send/?app_absent=0&phone=56968250850&text={mensagem}&type=phone_number",
-            "regras_label": "📋 Abrir regras oficiais da tabela fixa",
+            "regras_label": "📋 Regras gerais da tabela fixa",
             "regras_url": "https://latampass.latam.com/pt_br/viagem/usar-milhas-para-voar/regras-de-resgate/latam",
             "orientacao": (
                 "Peça ao atendimento para confirmar especificamente disponibilidade "
                 "de assento em companhia parceira pela tabela fixa LATAM Pass."
             ),
             "observacao": (
-                "Regra de referência cadastrada para esta rota. "
-                "Confirme elegibilidade, companhia parceira, disponibilidade "
-                "e regra vigente antes da emissão."
+                "A tabela fixa depende da cabine, da rota e de disponibilidade em companhia parceira. "
+                "Ela não se aplica a voos operados pela própria LATAM."
             )
         }
 
@@ -448,7 +463,7 @@ def grafico_historico_google_style(df, preco_atual=None):
     )
 
 st.title("✈️ Buscador Inteligente de Passagens")
-st.caption("Versão 11.1 Web — ida/volta inteligente + histórico visual estilo Google Flights + busca por cidade")
+st.caption("Versão 11.2 Web — tabela fixa com links oficiais por cabine + histórico estilo Google Flights + busca por cidade")
 
 if api_key():
     st.success("SerpApi conectada.")
@@ -1162,14 +1177,26 @@ if regra_fixa:
         )
     )
 
-    fixed_req_trecho = st.number_input(
-        "Milhas de referência por trecho",
-        min_value=0,
-        value=int(regra_fixa["por_trecho"]),
-        step=1000,
-        help="Valor de referência editável. Confirme a regra vigente antes da emissão."
+    cabines_disponiveis = list(regra_fixa.get("tabelas_cabine", {}).keys())
+    cabine_fixa = st.selectbox(
+        "Cabine da tabela fixa",
+        cabines_disponiveis,
+        index=0
     )
-    fixed_req = int(fixed_req_trecho * 2)
+    regra_cabine = regra_fixa["tabelas_cabine"][cabine_fixa]
+    fixed_req_trecho = int(regra_cabine["milhas_por_trecho"])
+    fixed_req = int(fixed_req_trecho * (2 if volta0 else 1))
+
+    st.info(
+        f"{cabine_fixa}: {pts(fixed_req_trecho)} milhas por trecho "
+        f"({pts(fixed_req)} milhas para a viagem selecionada)."
+    )
+
+    st.link_button(
+        f"📊 Ver tabela oficial LATAM — {cabine_fixa}",
+        regra_cabine["url"],
+        width="stretch"
+    )
 
     fixed_tax_auto, fixed_tax_msg = taxa_resgate_referencia(
         "LATAM", orig, dest, ida0, adultos
@@ -1195,7 +1222,7 @@ if regra_fixa:
     fixed_missing = max(fixed_req - lat, 0)
 
     a,b,c,d = st.columns(4)
-    a.metric("Exigência estimada ida e volta", f"{pts(fixed_req)} milhas")
+    a.metric("Exigência estimada da viagem", f"{pts(fixed_req)} milhas")
     b.metric("Seu saldo LATAM", pts(lat))
     c.metric("Milhas faltantes", pts(fixed_missing))
     milhas_para_comprar = fixed_missing if fixed_missing > 0 else fixed_req
