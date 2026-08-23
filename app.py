@@ -20,6 +20,7 @@ DATA_DIR.mkdir(exist_ok=True)
 SALDOS_FILE = DATA_DIR / "meus_saldos.json"
 CACHE_DIR = BASE / "cache_buscas"
 CACHE_DIR.mkdir(exist_ok=True)
+HIST_FILE = DATA_DIR / "historico_precos.csv"
 
 def _secret_or_env(name, default=""):
     try:
@@ -283,13 +284,8 @@ def classificar_preco_atual(preco_atual, historico_df, insights):
         "maximo": None,
         "diferenca_pct": None
     }
-def _secret_or_env(name, default=""):
-    try:
-        if name in st.secrets:
-            return str(st.secrets[name]).strip()
-    except Exception:
-        pass
-    return os.getenv(name, default).strip()
+
+
 def exigir_senha():
     senha_configurada = _secret_or_env("APP_PASSWORD")
     if not senha_configurada:
@@ -319,8 +315,69 @@ def exigir_senha():
 
 exigir_senha()
 
+
+def carregar_historico_local():
+    if HIST_FILE.exists():
+        try:
+            df = pd.read_csv(HIST_FILE)
+            if not df.empty and "capturado_em" in df.columns:
+                df["capturado_em"] = pd.to_datetime(df["capturado_em"], errors="coerce")
+            return df
+        except Exception:
+            pass
+    return pd.DataFrame(columns=[
+        "capturado_em","origens","destinos","ida","volta","adultos","cabine","conexoes","preco"
+    ])
+
+def salvar_ponto_historico(origens, destinos, ida, volta, adultos, cabine, conexoes, preco):
+    if not preco:
+        return
+    df = carregar_historico_local()
+    novo = pd.DataFrame([{
+        "capturado_em": datetime.now().isoformat(timespec="seconds"),
+        "origens": ",".join(origens),
+        "destinos": ",".join(destinos),
+        "ida": ida.isoformat(),
+        "volta": volta.isoformat(),
+        "adultos": int(adultos),
+        "cabine": str(cabine),
+        "conexoes": str(conexoes),
+        "preco": float(preco),
+    }])
+    df = pd.concat([df, novo], ignore_index=True)
+    # Mantém somente os últimos 180 dias de registros
+    df["capturado_em"] = pd.to_datetime(df["capturado_em"], errors="coerce")
+    limite = pd.Timestamp.now() - pd.Timedelta(days=180)
+    df = df[df["capturado_em"] >= limite]
+    try:
+        df.to_csv(HIST_FILE, index=False)
+    except Exception:
+        pass
+
+def historico_proprio(origens, destinos, ida, volta, adultos, cabine, conexoes, dias):
+    df = carregar_historico_local()
+    if df.empty:
+        return df
+    try:
+        limite = pd.Timestamp.now() - pd.Timedelta(days=dias)
+        alvo_o = ",".join(origens)
+        alvo_d = ",".join(destinos)
+        mask = (
+            (df["capturado_em"] >= limite) &
+            (df["origens"] == alvo_o) &
+            (df["destinos"] == alvo_d) &
+            (df["ida"] == ida.isoformat()) &
+            (df["volta"] == volta.isoformat()) &
+            (df["adultos"].astype(int) == int(adultos)) &
+            (df["cabine"].astype(str) == str(cabine)) &
+            (df["conexoes"].astype(str) == str(conexoes))
+        )
+        return df.loc[mask, ["capturado_em","preco"]].sort_values("capturado_em")
+    except Exception:
+        return pd.DataFrame()
+
 st.title("✈️ Buscador Inteligente de Passagens")
-st.caption("Versão 10 Web — acesso privado + histórico de preços + milhas + ranking automático")
+st.caption("Versão 10.3 Web — histórico de preços híbrido + tabela fixa LATAM explicada + comparador aprimorado")
 
 if api_key():
     st.success("SerpApi conectada.")
@@ -434,6 +491,7 @@ if rank:
 
     menor = rank[0]["Preço (R$)"]
     st.session_state["preco_ref"] = menor
+    salvar_ponto_historico(orig, dest, ida0, volta0, adultos, cab_pt, stop_pt, menor)
     st.metric("Menor preço de ida e volta encontrado", brl(menor))
 
     top = rank[:20]
@@ -518,72 +576,76 @@ dias_hist = 30 if periodo_hist == "Últimos 30 dias" else 60
 preco_atual_hist = float(st.session_state.get("preco_ref", 0) or 0)
 insights_raw = st.session_state.get("price_insights_raw", {}) or {}
 
-hist_df = pd.DataFrame()
+hist_google = pd.DataFrame()
 if insights_raw:
     hist_fake_container = {"price_insights": insights_raw}
-    hist_df, _ = extrair_historico_preco(hist_fake_container, dias_hist)
+    hist_google, _ = extrair_historico_preco(hist_fake_container, dias_hist)
 
-if preco_atual_hist > 0 and (not hist_df.empty or insights_raw):
-    analise = classificar_preco_atual(preco_atual_hist, hist_df, insights_raw)
+hist_local = historico_proprio(
+    orig, dest, ida0, volta0, adultos, cab_pt, stop_pt, dias_hist
+)
 
+if preco_atual_hist > 0 and not hist_google.empty:
+    analise = classificar_preco_atual(preco_atual_hist, hist_google, insights_raw)
+    st.success("Histórico obtido do Google Flights / Price Insights.")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Preço atual", brl(preco_atual_hist))
     c2.metric("Classificação", analise["nivel"])
+    c3.metric("Média do período", brl(analise["media"]))
+    c4.metric("Diferença para a média", f"{analise['diferenca_pct']:+.1f}%")
 
-    if analise["media"] is not None:
-        c3.metric("Média do período", brl(analise["media"]))
-        c4.metric(
-            "Diferença para a média",
-            f"{analise['diferenca_pct']:+.1f}%"
-        )
+    graf = hist_google.copy()
+    graf["Data"] = pd.to_datetime(graf["Data"])
+    graf = graf.set_index("Data")
+    graf["Preço atual"] = preco_atual_hist
+    st.line_chart(graf[["Preço (R$)", "Preço atual"]], width="stretch")
 
-        graf = hist_df.copy()
-        graf["Data"] = pd.to_datetime(graf["Data"])
-        graf = graf.set_index("Data")
-        graf["Preço atual"] = preco_atual_hist
+    st.caption(
+        f"No período selecionado: mínimo {brl(analise['minimo'])}, "
+        f"mediana {brl(analise['mediana'])} e máximo {brl(analise['maximo'])}."
+    )
 
-        st.line_chart(
-            graf[["Preço (R$)", "Preço atual"]],
-            width="stretch"
-        )
+elif preco_atual_hist > 0 and not hist_local.empty:
+    st.info(
+        "O Google Flights não forneceu Price Insights nesta pesquisa. "
+        "O gráfico abaixo usa o histórico próprio das pesquisas feitas neste aplicativo."
+    )
+    h = hist_local.copy()
+    h["capturado_em"] = pd.to_datetime(h["capturado_em"])
+    h = h.rename(columns={"capturado_em":"Data", "preco":"Preço (R$)"}).set_index("Data")
+    media = float(h["Preço (R$)"].mean())
+    minimo = float(h["Preço (R$)"].min())
+    maximo = float(h["Preço (R$)"].max())
+    diferenca = ((preco_atual_hist-media)/media*100) if media else 0
 
+    c1,c2,c3,c4 = st.columns(4)
+    c1.metric("Preço atual", brl(preco_atual_hist))
+    c2.metric("Média observada", brl(media))
+    c3.metric("Menor observado", brl(minimo))
+    c4.metric("Diferença para a média", f"{diferenca:+.1f}%")
+
+    h["Preço atual"] = preco_atual_hist
+    st.line_chart(h[["Preço (R$)","Preço atual"]], width="stretch")
+
+    if len(h) < 3:
         st.caption(
-            f"No período selecionado: mínimo {brl(analise['minimo'])}, "
-            f"mediana {brl(analise['mediana'])} e máximo {brl(analise['maximo'])}."
+            "Ainda há poucos registros próprios para uma avaliação robusta. "
+            "O histórico melhora à medida que você repete pesquisas da mesma viagem ao longo dos dias."
         )
-
-        if analise["nivel"] in ["Muito baixo", "Baixo"]:
-            st.success(
-                "O preço atual está abaixo do padrão recente para esta pesquisa."
-            )
-        elif analise["nivel"] == "Na média":
-            st.info(
-                "O preço atual está próximo da média observada no período."
-            )
-        else:
-            st.warning(
-                "O preço atual está acima da média recente; pode valer a pena acompanhar antes de comprar."
-            )
-    else:
-        nivel_google = (insights_raw or {}).get("price_level")
-        faixa = (insights_raw or {}).get("typical_price_range")
-        st.info(
-            "O Google Flights retornou uma classificação de preço, mas não forneceu "
-            "pontos históricos suficientes para desenhar o gráfico desta pesquisa."
-        )
-        if faixa and len(faixa) >= 2:
-            st.write(
-                f"Faixa típica informada pelo Google Flights: "
-                f"**{brl(faixa[0])} a {brl(faixa[1])}**."
-            )
 else:
     st.info(
-        "Faça uma pesquisa de passagens primeiro. Quando o Google Flights retornar "
-        "Price Insights, o gráfico de 30 ou 60 dias aparecerá aqui automaticamente."
+        "O Google Flights não retornou histórico para esta busca e ainda não há registros próprios suficientes. "
+        "A partir de agora, cada pesquisa concluída salva o menor preço encontrado para formar seu histórico."
     )
+
+st.caption(
+    "Observação: no Streamlit Community Cloud, o armazenamento local pode ser reiniciado em atualizações ou reinícios do aplicativo. "
+    "Por isso, o histórico próprio é complementar; quando Price Insights estiver disponível, ele é priorizado."
+)
 
 st.divider()
 st.subheader("3. Seus saldos de milhas")
+
 
 
 saved = load_saldos()
@@ -630,17 +692,30 @@ st.caption(
     "Se você fizer uma busca acima, o menor preço encontrado será usado automaticamente como referência."
 )
 
+def _secret_float(nome, padrao):
+    try:
+        return float(_secret_or_env(nome, str(padrao)).replace(",", "."))
+    except Exception:
+        return float(padrao)
+
 programas = [
-    ("Smiles", smi),
-    ("LATAM Pass dinâmica", lat),
-    ("Azul Fidelidade", azu)
+    ("Smiles", smi, "SMILES"),
+    ("LATAM Pass dinâmica", lat, "LATAM"),
+    ("Azul Fidelidade", azu, "AZUL")
 ]
+
+st.markdown("### Valores de referência do milheiro")
+st.caption(
+    "O aplicativo usa valores de referência para comparar o custo econômico das milhas. "
+    "Eles não são cotações oficiais em tempo real. Você pode alterá-los sempre que houver uma promoção "
+    "ou quando quiser atribuir outro valor às milhas que já possui."
+)
 
 rows = []
 status_programas = []
 cols = st.columns(3)
 
-for i, (nome, saldo) in enumerate(programas):
+for i, (nome, saldo, prefixo) in enumerate(programas):
     with cols[i]:
         st.markdown(f"### {nome}")
         st.metric("Seu saldo", pts(saldo))
@@ -650,28 +725,48 @@ for i, (nome, saldo) in enumerate(programas):
             min_value=0,
             value=0,
             step=1000,
-            key=f"r{i}"
+            key=f"r{i}",
+            help="Quantidade total de milhas/pontos que o programa está cobrando pela emissão."
         )
         tax = st.number_input(
-            f"Taxas (R$) — {nome}",
+            f"Taxas da emissão (R$) — {nome}",
             min_value=0.0,
             value=0.0,
             step=10.0,
-            key=f"t{i}"
+            key=f"t{i}",
+            help="Taxas em dinheiro cobradas junto com a emissão em milhas."
         )
+
+        compra_padrao = _secret_float(f"{prefixo}_BUY_PRICE_PER_1000", 0.0)
+        valor_padrao = _secret_float(f"{prefixo}_OWN_VALUE_PER_1000", 15.0)
+
         compra1000 = st.number_input(
-            f"Custo por 1.000 para completar (R$) — {nome}",
+            f"Preço atual para comprar 1.000 milhas (R$) — {nome}",
             min_value=0.0,
-            value=0.0,
+            value=float(compra_padrao),
             step=1.0,
-            key=f"c{i}"
+            key=f"c{i}",
+            help=(
+                "Use o preço efetivo da promoção atual para comprar 1.000 milhas/pontos. "
+                "Se você já tem saldo suficiente, esse valor não entra no desembolso."
+            )
         )
         valor1000 = st.number_input(
-            f"Valor econômico por 1.000 das suas milhas (R$) — {nome}",
+            f"Quanto considero que valem 1.000 milhas que já possuo (R$) — {nome}",
             min_value=0.0,
-            value=15.0,
+            value=float(valor_padrao),
             step=1.0,
-            key=f"v{i}"
+            key=f"v{i}",
+            help=(
+                "É um valor econômico atribuído às milhas que já estão no seu saldo. "
+                "Não é o preço de compra do milheiro. Ele serve para comparar milhas usadas com o preço em dinheiro."
+            )
+        )
+
+        if compra1000 == 0:
+            st.caption("Preço de compra do milheiro: não informado. Preencha apenas se precisar comprar/completar milhas.")
+        st.caption(
+            f"Valor econômico usado para suas milhas já existentes: {brl(valor1000)} por 1.000."
         )
 
         if req == 0:
@@ -690,7 +785,7 @@ for i, (nome, saldo) in enumerate(programas):
             if compra is None:
                 status_programas.append({
                     "Programa": nome,
-                    "Status": f"Faltam {pts(falt)} e falta informar o custo por 1.000 para completar"
+                    "Status": f"Faltam {pts(falt)} milhas/pontos; informe o preço atual para comprar 1.000 e completar o saldo"
                 })
             else:
                 imed = tax + compra
@@ -709,19 +804,36 @@ regra_fixa = fixed_table_rule(orig, dest)
 
 if regra_fixa:
     st.markdown(
-        f"### Tabela fixa {regra_fixa['programa']} — {regra_fixa['rota']}"
+        f"### Simulador de tabela fixa {regra_fixa['programa']} — {regra_fixa['rota']}"
     )
-    st.info(regra_fixa["observacao"])
+    st.warning(
+        "Esta seção é um simulador de referência. O aplicativo não confirma sozinho se existe assento elegível "
+        "por tabela fixa na data pesquisada. Só inclua esta opção no ranking se você confirmar a disponibilidade "
+        "no LATAM Pass/companhia parceira."
+    )
 
-    fixed_req = int(regra_fixa["ida_volta"])
+    usar_fixa = st.checkbox(
+        "Quero incluir a tabela fixa LATAM nesta comparação",
+        value=False
+    )
+
+    fixed_req_trecho = st.number_input(
+        "Milhas de referência por trecho",
+        min_value=0,
+        value=int(regra_fixa["por_trecho"]),
+        step=1000,
+        help="Valor de referência editável. Confirme a regra vigente antes da emissão."
+    )
+    fixed_req = int(fixed_req_trecho * 2)
+
     fixed_tax = st.number_input(
-        "Taxas estimadas da tabela fixa (R$)",
+        "Taxas estimadas da emissão por tabela fixa (R$)",
         min_value=0.0,
         value=0.0,
         step=10.0
     )
     fixed_buy = st.number_input(
-        f"Preço por 1.000 milhas {regra_fixa['programa']} para completar saldo (R$)",
+        f"Preço atual para comprar 1.000 milhas {regra_fixa['programa']} e completar saldo (R$)",
         min_value=0.0,
         value=0.0,
         step=1.0
@@ -730,7 +842,7 @@ if regra_fixa:
     fixed_missing = max(fixed_req - lat, 0)
 
     a,b,c,d = st.columns(4)
-    a.metric("Exigência ida e volta", f"{pts(fixed_req)} milhas")
+    a.metric("Exigência estimada ida e volta", f"{pts(fixed_req)} milhas")
     b.metric("Seu saldo LATAM", pts(lat))
     c.metric("Milhas faltantes", pts(fixed_missing))
     d.metric(
@@ -738,7 +850,11 @@ if regra_fixa:
         f"{brl((preco_ref-fixed_tax)/fixed_req*1000 if fixed_req else 0)} / 1.000"
     )
 
-    if fixed_missing == 0:
+    if not usar_fixa:
+        fixed_status = "Tabela fixa fora do ranking até você confirmar que quer usá-la."
+    elif fixed_req <= 0:
+        fixed_status = "Informe uma referência de milhas por trecho maior que zero."
+    elif fixed_missing == 0:
         rows.append({
             "Opção": f"{regra_fixa['programa']} tabela fixa",
             "Desembolso imediato": fixed_tax,
@@ -747,7 +863,7 @@ if regra_fixa:
             "Milhas faltantes": 0,
             "Saldo após emissão": lat - fixed_req
         })
-        fixed_status = "Saldo suficiente; falta confirmar disponibilidade e taxas."
+        fixed_status = "Incluída no ranking. Confirme disponibilidade real antes de emitir."
     elif fixed_buy > 0:
         comp = fixed_missing/1000 * fixed_buy
         rows.append({
@@ -758,23 +874,19 @@ if regra_fixa:
             "Milhas faltantes": fixed_missing,
             "Saldo após emissão": 0
         })
-        fixed_status = (
-            f"Faltam {pts(fixed_missing)} milhas; "
-            "o custo informado para completar o saldo entrou na comparação."
-        )
+        fixed_status = "Incluída no ranking usando o preço informado para completar o saldo."
     else:
         fixed_status = (
-            f"Faltam {pts(fixed_missing)} milhas; "
-            "informe o preço por 1.000 para incluir a tabela fixa no ranking."
+            f"Faltam {pts(fixed_missing)} milhas. Informe o preço atual para comprar 1.000 "
+            "antes de incluir essa alternativa no ranking."
         )
 
-    st.caption(f"Status da tabela fixa: {fixed_status}")
+    st.caption(f"Status: {fixed_status}")
 else:
     st.markdown("### Tabelas fixas aplicáveis à rota")
     st.info(
-        "Nenhuma tabela fixa cadastrada no aplicativo corresponde às origens "
-        "e destinos informados. As cotações dinâmicas de Smiles, LATAM Pass e "
-        "Azul Fidelidade continuam disponíveis para comparação."
+        "Nenhuma regra de tabela fixa cadastrada corresponde à rota atual. "
+        "As cotações dinâmicas dos programas continuam disponíveis normalmente."
     )
 
 if status_programas:
@@ -847,4 +959,3 @@ st.divider()
 st.caption(
     "Preços, disponibilidade e regras dos programas de fidelidade devem ser confirmados antes da compra ou emissão."
 )
- 
