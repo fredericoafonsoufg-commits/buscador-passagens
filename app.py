@@ -27,7 +27,7 @@ from reportlab.platypus import (
 
 st.set_page_config(
     page_title="Frederico Travel Tools",
-    page_icon="✈️",
+    page_icon="🌐",
     layout="wide"
 )
 
@@ -684,10 +684,6 @@ div[data-testid="stDownloadButton"]>button:hover{
 </style>
 """,unsafe_allow_html=True)
 _logo=_ftt_b64(BASE/"assets"/"frederico_travel_tools_logo.png")
-st.markdown("## ✈️ Buscador Inteligente de Passagens")
-st.caption("Pesquise voos, acompanhe preços e compare dinheiro com milhas.")
-
-
 def _pdf_safe(v):
     if v is None:
         return "-"
@@ -963,29 +959,67 @@ def gerar_relatorio_pdf(contexto):
     return buf.getvalue()
 
 
+
+# Top navigation / section shortcuts
+st.markdown("""
+<style>
+.fttTopNav{
+  display:flex;align-items:center;justify-content:space-between;gap:18px;
+  background:#fff;border:1px solid #e5ebf3;border-radius:16px;
+  padding:11px 16px;margin:0 0 18px 0;box-shadow:0 4px 16px rgba(8,34,74,.04);
+}
+.fttTopNav .brandMini{font-weight:850;color:#08224a;font-size:1.02rem;white-space:nowrap}
+.fttTopNav .links{display:flex;gap:18px;align-items:center;flex-wrap:wrap;justify-content:center;flex:1}
+.fttTopNav a{
+  color:#17325d;text-decoration:none;font-weight:750;font-size:.93rem;
+  padding:7px 10px;border-radius:10px;
+}
+.fttTopNav a:hover{color:#087CF0;background:#f2f7ff}
+.fttTopRight{display:flex;align-items:center;gap:10px}
+.fttBadge{
+  background:#f2f8ff;color:#087CF0;border:1px solid #d8e7ff;
+  border-radius:999px;padding:6px 10px;font-size:.8rem;font-weight:800;
+}
+.fttAvatar{
+  width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+  background:#087CF0;color:white;font-weight:800;font-size:.82rem;
+}
+@media(max-width:900px){
+  .fttTopNav{align-items:flex-start;flex-direction:column}
+  .fttTopNav .links{justify-content:flex-start}
+}
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown("""
+<div class="fttTopNav">
+  <div class="brandMini">Frederico Travel Tools</div>
+  <div class="links">
+    <a href="#buscador">Buscador</a>
+    <a href="#precos">Preços</a>
+    <a href="#milhas">Milhas</a>
+    <a href="#historico">Histórico</a>
+    <a href="#relatorios">Relatórios</a>
+  </div>
+  <div class="fttTopRight">
+    <div class="fttBadge">V13.1 Web</div>
+    <div class="fttAvatar">FA</div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
 with st.sidebar:
     if _logo:
         st.markdown(
             f"""
-            <div style="
-                background:#ffffff;
-                border:1px solid #e5ebf3;
-                border-radius:16px;
-                padding:10px 12px;
-                margin:0 0 16px 0;
-                box-shadow:0 4px 14px rgba(8,34,74,.04);
-                text-align:center;
-            ">
-                <img
-                    src="data:image/png;base64,{_logo}"
-                    style="width:100%;max-width:265px;height:auto;object-fit:contain;display:block;margin:auto;"
-                >
+            <div style="padding:4px 8px 12px;text-align:center;">
+              <img src="data:image/png;base64,{_logo}"
+                   style="width:100%;max-width:240px;height:auto;object-fit:contain;">
             </div>
             """,
             unsafe_allow_html=True
         )
-
-    st.markdown("### ✈️ Nova pesquisa")
+    st.markdown("### Nova pesquisa")
     st.caption("Origem, destino e datas em poucos passos.")
 
     orig_txt = campo_aeroporto_inteligente(
@@ -1005,7 +1039,7 @@ with st.sidebar:
 
     tipo_viagem = st.radio(
         "Tipo de viagem",
-        ["✈️ Só ida", "🔄 Ida e volta"],
+        ["Só ida", "Ida e volta"],
         horizontal=True,
         key="tipo_viagem"
     )
@@ -1017,7 +1051,7 @@ with st.sidebar:
         key="data_ida"
     )
 
-    if tipo_viagem == "🔄 Ida e volta":
+    if tipo_viagem == "Ida e volta":
         if st.session_state["data_volta"] < ida0:
             st.session_state["data_volta"] = ida0 + timedelta(days=7)
 
@@ -1031,33 +1065,34 @@ with st.sidebar:
         volta0 = None
 
     fi = st.selectbox("Flexibilidade da ida", [0,1,2,3,5,7], index=0)
-    if tipo_viagem == "🔄 Ida e volta":
+    if tipo_viagem == "Ida e volta":
         fv = st.selectbox("Flexibilidade da volta", [0,1,2,3,5,7], index=0)
     else:
         fv = 0
     adultos = st.number_input("Adultos", 1, 9, 1)
 
-    cab_pt = st.selectbox(
-        "Cabine",
-        ["Econômica", "Premium Economy", "Executiva", "Primeira"]
-    )
-    cab = {
-        "Econômica": 1,
-        "Premium Economy": 2,
-        "Executiva": 3,
-        "Primeira": 4
-    }[cab_pt]
+    with st.expander("Filtros avançados"):
+        cab_pt = st.selectbox(
+            "Cabine",
+            ["Econômica", "Premium Economy", "Executiva", "Primeira"]
+        )
+        cab = {
+            "Econômica": 1,
+            "Premium Economy": 2,
+            "Executiva": 3,
+            "Primeira": 4
+        }[cab_pt]
 
-    stop_pt = st.selectbox(
-        "Conexões",
-        ["Qualquer quantidade", "Somente direto", "Até 1 conexão", "Até 2 conexões"]
-    )
-    stops = {
-        "Qualquer quantidade": 0,
-        "Somente direto": 1,
-        "Até 1 conexão": 2,
-        "Até 2 conexões": 3
-    }[stop_pt]
+        stop_pt = st.selectbox(
+            "Conexões",
+            ["Qualquer quantidade", "Somente direto", "Até 1 conexão", "Até 2 conexões"]
+        )
+        stops = {
+            "Qualquer quantidade": 0,
+            "Somente direto": 1,
+            "Até 1 conexão": 2,
+            "Até 2 conexões": 3
+        }[stop_pt]
 
 orig = codigos(orig_txt)
 dest = codigos(dest_txt)
@@ -1066,16 +1101,56 @@ if volta0:
 else:
     comb = [(i, None) for i in flex(ida0, fi)]
 
+
+st.markdown('<div id="buscador"></div>', unsafe_allow_html=True)
+_hero_b64 = _ftt_b64(BASE / "assets" / "hero_aviao_moderno.png")
+if _hero_b64:
+    st.markdown(
+        f"""
+        <div class="fttHero2">
+          <div class="inner">
+            <div class="copy">
+              <h1>Buscador Inteligente<br><span>de Passagens</span></h1>
+              <p>Pesquise voos, acompanhe preços e compare dinheiro com milhas.</p>
+              <div class="features">
+                <div class="fttFeature">
+                  <div class="ico">1</div>
+                  <div><strong>Encontre</strong><small>as melhores opções</small></div>
+                </div>
+                <div class="fttFeature">
+                  <div class="ico">2</div>
+                  <div><strong>Compare</strong><small>preços e datas</small></div>
+                </div>
+                <div class="fttFeature">
+                  <div class="ico">3</div>
+                  <div><strong>Analise</strong><small>uso de milhas</small></div>
+                </div>
+                <div class="fttFeature">
+                  <div class="ico">4</div>
+                  <div><strong>Planeje</strong><small>sua próxima viagem</small></div>
+                </div>
+              </div>
+            </div>
+            <div class="visual" style="background-image:url('data:image/png;base64,{_hero_b64}')"></div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+else:
+    st.markdown("## Buscador Inteligente de Passagens")
+    st.caption("Pesquise voos, acompanhe preços e compare dinheiro com milhas.")
+
 st.subheader("1. Pesquisa de passagens em dinheiro")
 st.info(
-    f"A varredura pode consumir no máximo **{len(comb)} consulta(s)** novas. "
+    f"A pesquisa pode consumir no máximo **{len(comb)} consulta(s)** novas. "
     "Pesquisas idênticas já salvas são reaproveitadas."
 )
 
-ok = st.checkbox(f"Confirmo a varredura de até {len(comb)} consulta(s)")
+ok = st.checkbox(f"Confirmo a pesquisa de até {len(comb)} consulta(s)")
 force = st.checkbox("Ignorar cache e consultar novamente")
 
-if st.button("🔎 Fazer varredura", type="primary", disabled=not ok):
+if st.button("Fazer varredura", type="primary", disabled=not ok, width="stretch"):
     rows = []
     novas = reap = 0
     prog = st.progress(0)
@@ -1168,7 +1243,7 @@ if rank:
         choice = st.selectbox("Escolha uma das opções de ida", labels)
         sel = top[labels.index(choice)]
 
-        if st.button("🛬 Buscar mais opções de volta para esta ida"):
+        if st.button("Buscar mais opções de volta para esta ida"):
             p = dict(sel["_params"])
             p["departure_token"] = sel["_token"]
 
@@ -1219,6 +1294,7 @@ if volta0 and "retornos" in st.session_state:
 
 
 st.divider()
+st.markdown('<div id="historico"></div>', unsafe_allow_html=True)
 st.subheader("2. Histórico de preços")
 
 periodo_hist = st.radio(
@@ -1315,6 +1391,7 @@ st.caption(
 )
 
 st.divider()
+st.markdown('<div id="milhas"></div>', unsafe_allow_html=True)
 st.subheader("3. Seus saldos de milhas")
 
 
@@ -1341,7 +1418,7 @@ azu = c3.number_input(
     step=1000
 )
 
-if st.button("💾 Salvar saldos neste computador"):
+if st.button("Salvar saldos"):
     save_saldos({
         "LATAM Pass": lat,
         "Smiles": smi,
@@ -1350,6 +1427,7 @@ if st.button("💾 Salvar saldos neste computador"):
     st.success("Saldos salvos.")
 
 st.divider()
+st.markdown('<div id="precos"></div>', unsafe_allow_html=True)
 st.subheader("4. Comparador dinheiro × milhas")
 
 preco_ref = st.number_input(
@@ -1882,7 +1960,18 @@ contexto_pdf = {
 }
 
 st.divider()
-st.markdown("### 📄 Relatório completo da pesquisa")
+st.markdown('<div id="relatorios"></div>', unsafe_allow_html=True)
+st.markdown("""
+<div style="
+    background:#fff;border:1px solid #dfe7f0;border-radius:18px;
+    padding:18px 20px;margin-top:10px;box-shadow:0 5px 18px rgba(8,34,74,.04);
+">
+  <div style="font-size:1.05rem;font-weight:800;color:#08224a;">Relatório completo em PDF</div>
+  <div style="color:#718096;margin-top:4px;">
+    Baixe um relatório completo com voos, gráficos, tabelas, comparação de milhas e recomendação final.
+  </div>
+</div>
+""", unsafe_allow_html=True)
 st.caption(
     "Baixe um PDF organizado com a marca Frederico Travel Tools, dados da viagem, "
     "resultados de voos, histórico de preços, gráfico, saldos, comparador de milhas, "
@@ -1909,7 +1998,6 @@ else:
 
 st.markdown("""
 <div class="fttFooter">
-<strong>Frederico Travel Tools</strong> · Planeje. Compare. Viaje melhor.<br>
-Desenvolvido por Frederico Afonso Farias · © 2026
+Desenvolvido por Frederico Afonso Farias · © 2026 · Dados via SerpApi · Tenha uma excelente busca!
 </div>
 """,unsafe_allow_html=True)
