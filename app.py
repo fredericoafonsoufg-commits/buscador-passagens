@@ -1,4 +1,4 @@
-
+ 
 import os, json, hashlib, statistics, hmac
 from datetime import date, timedelta, datetime
 from pathlib import Path
@@ -377,7 +377,7 @@ def historico_proprio(origens, destinos, ida, volta, adultos, cabine, conexoes, 
         return pd.DataFrame()
 
 st.title("✈️ Buscador Inteligente de Passagens")
-st.caption("Versão 10.3 Web — histórico de preços híbrido + tabela fixa LATAM explicada + comparador aprimorado")
+st.caption("Versão 10.4 Web — gráfico em barras + referências do milheiro + tabela fixa com confirmação de disponibilidade")
 
 if api_key():
     st.success("SerpApi conectada.")
@@ -598,7 +598,8 @@ if preco_atual_hist > 0 and not hist_google.empty:
     graf["Data"] = pd.to_datetime(graf["Data"])
     graf = graf.set_index("Data")
     graf["Preço atual"] = preco_atual_hist
-    st.line_chart(graf[["Preço (R$)", "Preço atual"]], width="stretch")
+    st.bar_chart(graf[["Preço (R$)"]], width="stretch")
+    st.caption(f"Referência atual: {brl(preco_atual_hist)} · Média: {brl(analise['media'])}")
 
     st.caption(
         f"No período selecionado: mínimo {brl(analise['minimo'])}, "
@@ -625,7 +626,8 @@ elif preco_atual_hist > 0 and not hist_local.empty:
     c4.metric("Diferença para a média", f"{diferenca:+.1f}%")
 
     h["Preço atual"] = preco_atual_hist
-    st.line_chart(h[["Preço (R$)","Preço atual"]], width="stretch")
+    st.bar_chart(h[["Preço (R$)"]], width="stretch")
+    st.caption(f"Referência atual: {brl(preco_atual_hist)} · Média observada: {brl(media)}")
 
     if len(h) < 3:
         st.caption(
@@ -706,9 +708,14 @@ programas = [
 
 st.markdown("### Valores de referência do milheiro")
 st.caption(
-    "O aplicativo usa valores de referência para comparar o custo econômico das milhas. "
-    "Eles não são cotações oficiais em tempo real. Você pode alterá-los sempre que houver uma promoção "
-    "ou quando quiser atribuir outro valor às milhas que já possui."
+    "Os campos abaixo vêm com referências cadastradas e continuam editáveis. "
+    "Preço de compra é diferente do valor econômico atribuído às milhas que você já possui."
+)
+
+st.info(
+    "Smiles: referência-base cadastrada de R$ 80,00 por 1.000 milhas para compra sem considerar bônus. "
+    "Promoções com bônus reduzem o custo efetivo do milheiro. "
+    "LATAM Pass e Azul: o aplicativo não inventa uma cotação atual; use o valor da oferta disponível para sua conta."
 )
 
 rows = []
@@ -737,7 +744,8 @@ for i, (nome, saldo, prefixo) in enumerate(programas):
             help="Taxas em dinheiro cobradas junto com a emissão em milhas."
         )
 
-        compra_padrao = _secret_float(f"{prefixo}_BUY_PRICE_PER_1000", 0.0)
+        compra_default = 80.0 if prefixo == "SMILES" else 0.0
+        compra_padrao = _secret_float(f"{prefixo}_BUY_PRICE_PER_1000", compra_default)
         valor_padrao = _secret_float(f"{prefixo}_OWN_VALUE_PER_1000", 15.0)
 
         compra1000 = st.number_input(
@@ -751,6 +759,11 @@ for i, (nome, saldo, prefixo) in enumerate(programas):
                 "Se você já tem saldo suficiente, esse valor não entra no desembolso."
             )
         )
+        if prefixo == "SMILES":
+            st.caption("Referência Smiles: R$ 80/1.000 antes de bônus promocionais. Fonte oficial consultada em 23/08/2026.")
+        else:
+            st.caption("Cotação automática oficial não disponível nesta versão; informe a oferta atual exibida para sua conta.")
+
         valor1000 = st.number_input(
             f"Quanto considero que valem 1.000 milhas que já possuo (R$) — {nome}",
             min_value=0.0,
@@ -812,9 +825,20 @@ if regra_fixa:
         "no LATAM Pass/companhia parceira."
     )
 
-    usar_fixa = st.checkbox(
-        "Quero incluir a tabela fixa LATAM nesta comparação",
-        value=False
+    disponibilidade_fixa = st.selectbox(
+        "Você confirmou disponibilidade de assento elegível pela tabela fixa?",
+        [
+            "Ainda não verifiquei",
+            "Verifiquei e NÃO há disponibilidade",
+            "Verifiquei e HÁ disponibilidade"
+        ],
+        index=0
+    )
+    usar_fixa = disponibilidade_fixa == "Verifiquei e HÁ disponibilidade"
+
+    st.caption(
+        "A tabela fixa LATAM Pass é para voos de companhias parceiras e não se aplica a voos operados pela própria LATAM. "
+        "A disponibilidade pode ser diferente da exibida no site da parceira e deve ser confirmada no canal de vendas LATAM Pass."
     )
 
     fixed_req_trecho = st.number_input(
@@ -851,7 +875,11 @@ if regra_fixa:
     )
 
     if not usar_fixa:
-        fixed_status = "Tabela fixa fora do ranking até você confirmar que quer usá-la."
+        fixed_status = (
+            "Tabela fixa fora do ranking. Primeiro confirme a disponibilidade de assento elegível no LATAM Pass."
+            if disponibilidade_fixa == "Ainda não verifiquei"
+            else "Você informou que não há disponibilidade; a tabela fixa não entra no ranking."
+        )
     elif fixed_req <= 0:
         fixed_status = "Informe uma referência de milhas por trecho maior que zero."
     elif fixed_missing == 0:
