@@ -283,8 +283,13 @@ def classificar_preco_atual(preco_atual, historico_df, insights):
         "maximo": None,
         "diferenca_pct": None
     }
-
-
+def _secret_or_env(name, default=""):
+    try:
+        if name in st.secrets:
+            return str(st.secrets[name]).strip()
+    except Exception:
+        pass
+    return os.getenv(name, default).strip()
 def exigir_senha():
     senha_configurada = _secret_or_env("APP_PASSWORD")
     if not senha_configurada:
