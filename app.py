@@ -5,6 +5,7 @@ from datetime import date, timedelta, datetime
 from pathlib import Path
 
 import pandas as pd
+import altair as alt
 import requests
 import streamlit as st
 
@@ -125,14 +126,13 @@ def consulta(params, force=False):
     return d, False
 
 def params_base(orig, dest, ida, volta, adultos, cabine, stops):
-    return {
+    p = {
         "engine": "google_flights",
         "api_key": api_key(),
         "departure_id": ",".join(orig),
         "arrival_id": ",".join(dest),
         "outbound_date": ida.isoformat(),
-        "return_date": volta.isoformat(),
-        "type": 1,
+        "type": 1 if volta else 2,
         "travel_class": cabine,
         "adults": adultos,
         "stops": stops,
@@ -140,6 +140,9 @@ def params_base(orig, dest, ida, volta, adultos, cabine, stops):
         "gl": "br",
         "hl": "pt"
     }
+    if volta:
+        p["return_date"] = volta.isoformat()
+    return p
 
 def all_items(d):
     return (d.get("best_flights") or []) + (d.get("other_flights") or [])
@@ -351,7 +354,7 @@ def salvar_ponto_historico(origens, destinos, ida, volta, adultos, cabine, conex
         "origens": ",".join(origens),
         "destinos": ",".join(destinos),
         "ida": ida.isoformat(),
-        "volta": volta.isoformat(),
+        "volta": volta.isoformat() if volta else "",
         "adultos": int(adultos),
         "cabine": str(cabine),
         "conexoes": str(conexoes),
@@ -380,7 +383,7 @@ def historico_proprio(origens, destinos, ida, volta, adultos, cabine, conexoes, 
             (df["origens"] == alvo_o) &
             (df["destinos"] == alvo_d) &
             (df["ida"] == ida.isoformat()) &
-            (df["volta"] == volta.isoformat()) &
+            (df["volta"].fillna("") == (volta.isoformat() if volta else "")) &
             (df["adultos"].astype(int) == int(adultos)) &
             (df["cabine"].astype(str) == str(cabine)) &
             (df["conexoes"].astype(str) == str(conexoes))
@@ -389,35 +392,210 @@ def historico_proprio(origens, destinos, ida, volta, adultos, cabine, conexoes, 
     except Exception:
         return pd.DataFrame()
 
+
+def grafico_historico_google_style(df, preco_atual=None):
+    if df is None or df.empty:
+        return
+
+    g = df.copy()
+    if "Data" not in g.columns:
+        g = g.reset_index()
+        if "index" in g.columns:
+            g = g.rename(columns={"index": "Data"})
+    g["Data"] = pd.to_datetime(g["Data"], errors="coerce")
+    g["Preço (R$)"] = pd.to_numeric(g["Preço (R$)"], errors="coerce")
+    g = g.dropna(subset=["Data", "Preço (R$)"]).sort_values("Data")
+    if g.empty:
+        return
+
+    hoje = pd.Timestamp.now().normalize()
+    def rel(d):
+        dias = int((hoje - pd.Timestamp(d).normalize()).days)
+        if dias <= 0:
+            return "Hoje"
+        if dias == 1:
+            return "Há 1 dia"
+        return f"Há {dias} dias"
+
+    g["Quando"] = g["Data"].apply(rel)
+    base = alt.Chart(g).encode(
+        x=alt.X("Data:T", title=None, axis=alt.Axis(format="%d/%m", labelAngle=0, grid=False)),
+        y=alt.Y("Preço (R$):Q", title=None, scale=alt.Scale(zero=False),
+                axis=alt.Axis(format=",.0f", grid=True)),
+        tooltip=[
+            alt.Tooltip("Quando:N", title="Quando"),
+            alt.Tooltip("Data:T", title="Data/hora", format="%d/%m/%Y %H:%M"),
+            alt.Tooltip("Preço (R$):Q", title="Preço", format=",.2f")
+        ]
+    )
+    area = base.mark_area(opacity=0.12)
+    linha = base.mark_line(strokeWidth=3)
+    pontos = base.mark_circle(size=45)
+
+    chart = area + linha + pontos
+
+    if preco_atual and preco_atual > 0:
+        ref = pd.DataFrame({"Preço atual": [float(preco_atual)]})
+        regra = alt.Chart(ref).mark_rule(strokeDash=[6,4]).encode(
+            y=alt.Y("Preço atual:Q"),
+            tooltip=[alt.Tooltip("Preço atual:Q", title="Preço atual", format=",.2f")]
+        )
+        chart = chart + regra
+
+    st.altair_chart(
+        chart.properties(height=280).configure_view(strokeWidth=0),
+        width="stretch"
+    )
+
 st.title("✈️ Buscador Inteligente de Passagens")
-st.caption("Versão 10.7 Web — taxas automáticas + preço máximo do milheiro + tabela fixa com verificação")
+st.caption("Versão 11.1 Web — ida/volta inteligente + histórico visual estilo Google Flights + busca por cidade")
 
 if api_key():
     st.success("SerpApi conectada.")
 else:
     st.error("SERPAPI_API_KEY não encontrada.")
 
+
+AEROPORTOS = {
+    "Goiânia": [("GYN", "Aeroporto de Goiânia - Santa Genoveva")],
+    "Brasília": [("BSB", "Aeroporto Internacional de Brasília")],
+    "São Paulo": [
+        ("GRU", "Aeroporto Internacional de São Paulo/Guarulhos"),
+        ("CGH", "Aeroporto de Congonhas"),
+        ("VCP", "Aeroporto Internacional de Viracopos")
+    ],
+    "Rio de Janeiro": [
+        ("GIG", "Aeroporto Internacional do Rio de Janeiro/Galeão"),
+        ("SDU", "Aeroporto Santos Dumont")
+    ],
+    "Belo Horizonte": [
+        ("CNF", "Aeroporto Internacional de Belo Horizonte/Confins"),
+        ("PLU", "Aeroporto da Pampulha")
+    ],
+    "Buenos Aires": [
+        ("EZE", "Aeroporto Internacional Ministro Pistarini/Ezeiza"),
+        ("AEP", "Aeroparque Jorge Newbery")
+    ],
+    "Santiago": [("SCL", "Aeroporto Internacional Arturo Merino Benítez")],
+    "Lima": [("LIM", "Aeroporto Internacional Jorge Chávez")],
+    "Bogotá": [("BOG", "Aeroporto Internacional El Dorado")],
+    "Montevidéu": [("MVD", "Aeroporto Internacional de Carrasco")],
+    "Assunção": [("ASU", "Aeroporto Internacional Silvio Pettirossi")],
+    "Curitiba": [("CWB", "Aeroporto Internacional Afonso Pena")],
+    "Porto Alegre": [("POA", "Aeroporto Internacional Salgado Filho")],
+    "Recife": [("REC", "Aeroporto Internacional do Recife/Guararapes")],
+    "Salvador": [("SSA", "Aeroporto Internacional de Salvador")],
+    "Fortaleza": [("FOR", "Aeroporto Internacional de Fortaleza")],
+    "Florianópolis": [("FLN", "Aeroporto Internacional Hercílio Luz")],
+    "Manaus": [("MAO", "Aeroporto Internacional Eduardo Gomes")],
+}
+
+def opcoes_aeroportos(termo):
+    termo = (termo or "").strip().lower()
+    if not termo:
+        return []
+    achados = []
+    for cidade, aeroportos in AEROPORTOS.items():
+        for codigo, nome in aeroportos:
+            texto = f"{cidade} {codigo} {nome}".lower()
+            if termo in texto:
+                achados.append((cidade, codigo, nome))
+    return achados
+
+def formatar_aeroporto(item):
+    cidade, codigo, nome = item
+    return f"{cidade} — {codigo} — {nome}"
+
 with st.sidebar:
     st.header("Pesquisa aérea")
 
-    orig_txt = st.text_input("Origens", "GYN,BSB")
-    dest_txt = st.text_input("Destinos", "EZE,AEP")
+    st.caption("Você pode informar o código do aeroporto ou procurar pela cidade.")
+
+    modo_origem = st.radio(
+        "Como deseja informar a origem?",
+        ["Código(s) do aeroporto", "Buscar por cidade"],
+        horizontal=True,
+        key="modo_origem"
+    )
+
+    if modo_origem == "Código(s) do aeroporto":
+        orig_txt = st.text_input("Origens", "GYN,BSB")
+    else:
+        termo_o = st.text_input("Digite a cidade de origem", "Goiânia")
+        op_o = opcoes_aeroportos(termo_o)
+        if op_o:
+            sel_o = st.multiselect(
+                "Selecione o(s) aeroporto(s) de origem",
+                options=op_o,
+                default=op_o,
+                format_func=formatar_aeroporto
+            )
+            orig_txt = ",".join([x[1] for x in sel_o])
+        else:
+            st.warning("Nenhum aeroporto cadastrado encontrado para essa cidade.")
+            orig_txt = ""
+
+    modo_destino = st.radio(
+        "Como deseja informar o destino?",
+        ["Código(s) do aeroporto", "Buscar por cidade"],
+        horizontal=True,
+        key="modo_destino"
+    )
+
+    if modo_destino == "Código(s) do aeroporto":
+        dest_txt = st.text_input("Destinos", "EZE,AEP")
+    else:
+        termo_d = st.text_input("Digite a cidade de destino", "Buenos Aires")
+        op_d = opcoes_aeroportos(termo_d)
+        if op_d:
+            sel_d = st.multiselect(
+                "Selecione o(s) aeroporto(s) de destino",
+                options=op_d,
+                default=op_d,
+                format_func=formatar_aeroporto
+            )
+            dest_txt = ",".join([x[1] for x in sel_d])
+        else:
+            st.warning("Nenhum aeroporto cadastrado encontrado para essa cidade.")
+            dest_txt = ""
+
+    if "data_ida" not in st.session_state:
+        st.session_state["data_ida"] = date.today() + timedelta(days=30)
+    if "data_volta" not in st.session_state:
+        st.session_state["data_volta"] = date.today() + timedelta(days=37)
+
+    tipo_viagem = st.radio(
+        "Tipo de viagem",
+        ["✈️ Só ida", "🔄 Ida e volta"],
+        horizontal=True,
+        key="tipo_viagem"
+    )
 
     ida0 = st.date_input(
-        "Data principal de ida",
-        date.today() + timedelta(days=30),
+        "Data da ida",
         min_value=date.today(),
-        format="DD/MM/YYYY"
-    )
-    volta0 = st.date_input(
-        "Data principal de volta",
-        date.today() + timedelta(days=37),
-        min_value=ida0,
-        format="DD/MM/YYYY"
+        format="DD/MM/YYYY",
+        key="data_ida"
     )
 
+    if tipo_viagem == "🔄 Ida e volta":
+        if st.session_state["data_volta"] < ida0:
+            st.session_state["data_volta"] = ida0 + timedelta(days=7)
+
+        volta0 = st.date_input(
+            "Data da volta",
+            min_value=ida0,
+            format="DD/MM/YYYY",
+            key="data_volta"
+        )
+    else:
+        volta0 = None
+
     fi = st.selectbox("Flexibilidade da ida", [0,1,2,3,5,7], index=0)
-    fv = st.selectbox("Flexibilidade da volta", [0,1,2,3,5,7], index=0)
+    if tipo_viagem == "🔄 Ida e volta":
+        fv = st.selectbox("Flexibilidade da volta", [0,1,2,3,5,7], index=0)
+    else:
+        fv = 0
     adultos = st.number_input("Adultos", 1, 9, 1)
 
     cab_pt = st.selectbox(
@@ -444,7 +622,10 @@ with st.sidebar:
 
 orig = codigos(orig_txt)
 dest = codigos(dest_txt)
-comb = [(i,v) for i in flex(ida0,fi) for v in flex(volta0,fv) if v > i]
+if volta0:
+    comb = [(i, v) for i in flex(ida0, fi) for v in flex(volta0, fv) if v > i]
+else:
+    comb = [(i, None) for i in flex(ida0, fi)]
 
 st.subheader("1. Pesquisa de passagens em dinheiro")
 st.info(
@@ -469,10 +650,10 @@ if st.button("🔎 Fazer varredura", type="primary", disabled=not ok):
 
             for item in all_items(d):
                 s = summarize(item)
-                if s and isinstance(s["preco"], (int,float)) and s["token"]:
+                if s and isinstance(s["preco"], (int,float)) and (volta is None or s["token"]):
                     rows.append({
                         "Ida": data_br(ida),
-                        "Volta": data_br(volta),
+                        "Volta": data_br(volta) if volta else "—",
                         "Preço (R$)": float(s["preco"]),
                         "Origem": s["origem"],
                         "Destino": s["destino"],
@@ -498,14 +679,14 @@ rank = st.session_state.get("rank", [])
 if rank:
     novas, reap = st.session_state.get("uso", (0,0))
     st.success(
-        f"Foram encontradas **{len(rank)} opções de ida**. "
+        f"Foram encontradas **{len(rank)} opções**. "
         f"Consultas novas: **{novas}** · reaproveitadas: **{reap}**."
     )
 
     menor = rank[0]["Preço (R$)"]
     st.session_state["preco_ref"] = menor
     salvar_ponto_historico(orig, dest, ida0, volta0, adultos, cab_pt, stop_pt, menor)
-    st.metric("Menor preço de ida e volta encontrado", brl(menor))
+    st.metric("Menor preço encontrado", brl(menor))
 
     top = rank[:20]
     st.dataframe(
@@ -517,55 +698,58 @@ if rank:
         }
     )
 
-    st.subheader("Mais opções de ida e volta")
+    if volta0:
+        st.subheader("Mais opções de ida e volta")
 
-    labels = [
-        f"{i+1}. {brl(x['Preço (R$)'])} | {x['Ida']} → {x['Volta']} | "
-        f"{x['Origem']}→{x['Destino']} | {x['Companhia(s)']} | {x['Saída ida']}"
-        for i,x in enumerate(top)
-    ]
+        labels = [
+            f"{i+1}. {brl(x['Preço (R$)'])} | {x['Ida']} → {x['Volta']} | "
+            f"{x['Origem']}→{x['Destino']} | {x['Companhia(s)']} | {x['Saída ida']}"
+            for i,x in enumerate(top)
+        ]
 
-    choice = st.selectbox("Escolha uma das opções de ida", labels)
-    sel = top[labels.index(choice)]
+        choice = st.selectbox("Escolha uma das opções de ida", labels)
+        sel = top[labels.index(choice)]
 
-    if st.button("🛬 Buscar mais opções de volta para esta ida"):
-        p = dict(sel["_params"])
-        p["departure_token"] = sel["_token"]
+        if st.button("🛬 Buscar mais opções de volta para esta ida"):
+            p = dict(sel["_params"])
+            p["departure_token"] = sel["_token"]
 
-        try:
-            d, cached = consulta(p)
-            rr = []
+            try:
+                d, cached = consulta(p)
+                rr = []
 
-            for item in all_items(d):
-                s = summarize(item)
-                if s:
-                    rr.append({
-                        "Preço total (R$)": s["preco"],
-                        "Origem": s["origem"],
-                        "Destino": s["destino"],
-                        "Companhia(s)": s["cias"],
-                        "Saída": data_br(s["saida"]),
-                        "Chegada": data_br(s["chegada"]),
-                        "Escalas": s["escalas"],
-                        "Duração": s["duracao"],
-                        "Voos": s["voos"]
-                    })
+                for item in all_items(d):
+                    s = summarize(item)
+                    if s:
+                        rr.append({
+                            "Preço total (R$)": s["preco"],
+                            "Origem": s["origem"],
+                            "Destino": s["destino"],
+                            "Companhia(s)": s["cias"],
+                            "Saída": data_br(s["saida"]),
+                            "Chegada": data_br(s["chegada"]),
+                            "Escalas": s["escalas"],
+                            "Duração": s["duracao"],
+                            "Voos": s["voos"]
+                        })
 
-            if rr:
-                rdf = pd.DataFrame(rr)
-                rdf["Preço total (R$)"] = pd.to_numeric(
-                    rdf["Preço total (R$)"],
-                    errors="coerce"
-                )
-                st.session_state["retornos"] = rdf.sort_values(
-                    "Preço total (R$)",
-                    na_position="last"
-                )
+                if rr:
+                    rdf = pd.DataFrame(rr)
+                    rdf["Preço total (R$)"] = pd.to_numeric(
+                        rdf["Preço total (R$)"],
+                        errors="coerce"
+                    )
+                    st.session_state["retornos"] = rdf.sort_values(
+                        "Preço total (R$)",
+                        na_position="last"
+                    )
 
-        except Exception as e:
-            st.error(str(e))
+            except Exception as e:
+                st.error(str(e))
+    else:
+        st.caption("Pesquisa somente de ida: não há etapa de seleção de retorno.")
 
-if "retornos" in st.session_state:
+if volta0 and "retornos" in st.session_state:
     st.dataframe(
         st.session_state["retornos"],
         width="stretch",
@@ -611,7 +795,7 @@ if preco_atual_hist > 0 and not hist_google.empty:
     graf["Data"] = pd.to_datetime(graf["Data"])
     graf = graf.set_index("Data")
     graf["Preço atual"] = preco_atual_hist
-    st.bar_chart(graf[["Preço (R$)"]], width="stretch")
+    grafico_historico_google_style(graf.reset_index(), preco_atual_hist)
     st.caption(f"Referência atual: {brl(preco_atual_hist)} · Média: {brl(analise['media'])}")
 
     st.caption(
@@ -639,7 +823,7 @@ elif preco_atual_hist > 0 and not hist_local.empty:
     c4.metric("Diferença para a média", f"{diferenca:+.1f}%")
 
     h["Preço atual"] = preco_atual_hist
-    st.bar_chart(h[["Preço (R$)"]], width="stretch")
+    grafico_historico_google_style(h.reset_index(), preco_atual_hist)
     st.caption(f"Referência atual: {brl(preco_atual_hist)} · Média observada: {brl(media)}")
 
     if len(h) < 3:
