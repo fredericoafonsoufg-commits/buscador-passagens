@@ -38,9 +38,6 @@ st.markdown("""
 [data-testid="stDecoration"] {display:none !important;}
 [data-testid="stStatusWidget"] {display:none !important;}
 #MainMenu {visibility:hidden !important;}
-[data-testid="stSidebarCollapseButton"] {display:none !important;}
-[data-testid="collapsedControl"] {display:none !important;}
-[data-testid="stSidebarCollapsedControl"] {display:none !important;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -72,12 +69,57 @@ st.markdown("""
 [data-testid="stSidebar"] > div:first-child { width:365px !important; }
 [data-testid="stSidebarCollapseButton"],
 [data-testid="collapsedControl"],
-[data-testid="stSidebarCollapsedControl"] { display:none !important; }
 [data-testid="stSidebar"] .block-container { padding:16px 18px 18px !important; }
 .block-container { padding-top:0.7rem !important; max-width:1500px !important; }
 div[data-baseweb="select"] > div,
 div[data-baseweb="input"] > div {
     border-radius:10px !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+
+st.markdown("""
+<style>
+/* Sidebar: abre expandida; se for recolhida, o botão de reabrir permanece visível. */
+[data-testid="stSidebar"] {
+    min-width: 365px !important;
+    max-width: 365px !important;
+    background: #ffffff !important;
+    border-right: 1px solid #e5ebf3 !important;
+}
+[data-testid="stSidebar"] > div:first-child {
+    width: 365px !important;
+}
+[data-testid="stSidebar"] .block-container {
+    padding: 16px 18px 18px !important;
+}
+[data-testid="stSidebarCollapseButton"] {
+    display: flex !important;
+    visibility: visible !important;
+    opacity: .45 !important;
+}
+[data-testid="collapsedControl"],
+[data-testid="stSidebarCollapsedControl"] {
+    display: flex !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+}
+
+/* Oculta elementos administrativos do Streamlit Cloud que não fazem parte do app. */
+[data-testid="stAppDeployButton"],
+[data-testid="stToolbarActions"],
+[data-testid="stStatusWidget"],
+div[class*="viewerBadge"],
+div[class*="ViewerBadge"],
+div[class*="manage-app"],
+div[class*="ManageApp"] {
+    display: none !important;
+}
+
+/* Mantém o cabeçalho discreto sem esconder o botão de reabrir a lateral. */
+header[data-testid="stHeader"] {
+    background: transparent !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -1036,7 +1078,7 @@ st.markdown("""
   <a href="#historico">Histórico</a>
   <a href="#relatorios">Relatórios</a>
   <div class="grow"></div>
-  <div class="version">V14.0 Web</div>
+  <div class="version">V14.1 Web</div>
   <div class="avatar">FA</div>
 </div>
 """, unsafe_allow_html=True)
