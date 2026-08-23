@@ -478,9 +478,6 @@ def grafico_historico_google_style(df, preco_atual=None):
         width="stretch"
     )
 
-st.title("✈️ Buscador Inteligente de Passagens")
-st.caption("Frederico Travel Tools · Relatório completo de pesquisa, preços e milhas")
-
 if not api_key():
     st.error("Serviço de pesquisa indisponível. Verifique a configuração do aplicativo.")
 
@@ -488,7 +485,6 @@ if not api_key():
 
 # Base mundial de aeroportos IATA. Se o pacote não carregar, mantém alguns
 # aeroportos essenciais como fallback para o app continuar funcionando.
-@st.cache_resource
 def carregar_aeroportos():
     registros = []
     if airportsdata is not None:
@@ -644,21 +640,45 @@ st.markdown("""
 <style>
 :root{--navy:#08224a;--blue:#0b84f3;--bg:#f7f9fc;--line:#e5ebf3}
 .stApp{background:var(--bg)}
-.block-container{padding-top:1.25rem;max-width:1480px}
+.block-container{padding-top:2.2rem;max-width:1480px}
 [data-testid="stSidebar"]{background:#fff;border-right:1px solid var(--line)}
 h1,h2,h3{color:var(--navy);letter-spacing:-.025em}
 div[data-testid="stMetric"]{background:#fff;border:1px solid var(--line);border-radius:16px;padding:14px 16px;box-shadow:0 5px 18px rgba(8,34,74,.04)}
-.stButton>button{border-radius:12px;min-height:44px;font-weight:650}
-.stButton>button[kind="primary"]{background:linear-gradient(135deg,var(--navy),var(--blue));border:0}
+.stButton>button{border-radius:12px;min-height:44px;font-weight:700}
+.stButton>button[kind="primary"]{
+    background:#087CF0!important;
+    color:#FFFFFF!important;
+    border:1px solid #087CF0!important;
+}
+.stButton>button[kind="primary"]:hover{
+    background:#0668CC!important;
+    color:#FFFFFF!important;
+    border-color:#0668CC!important;
+}
+.stButton>button:disabled{
+    background:#E8EEF6!important;
+    color:#8A98AA!important;
+    border-color:#D8E1EC!important;
+    opacity:1!important;
+}
 div[data-baseweb="input"],div[data-baseweb="select"]{border-radius:12px}
+div[data-testid="stDownloadButton"]>button{
+    background:#087CF0!important;color:#fff!important;border:1px solid #087CF0!important;
+    border-radius:12px!important;font-weight:700!important;min-height:44px!important;
+}
+div[data-testid="stDownloadButton"]>button:hover{
+    background:#0668CC!important;color:#fff!important;border-color:#0668CC!important;
+}
 .fttHero{background:#fff;border:1px solid var(--line);border-radius:20px;padding:18px 22px;margin:4px 0 22px;box-shadow:0 8px 28px rgba(8,34,74,.05);overflow:visible}
-.fttHero img{display:block;width:min(560px,92%);height:auto;margin:auto;object-fit:contain}
+.fttHero img{display:block;width:min(610px,94%);height:auto;margin:auto;object-fit:contain}
 .fttFooter{margin-top:38px;padding:20px 4px 8px;border-top:1px solid var(--line);text-align:center;color:#718096;font-size:.88rem}
 </style>
 """,unsafe_allow_html=True)
 _logo=_ftt_b64(BASE/"assets"/"frederico_travel_tools_logo.png")
 if _logo:
     st.markdown(f'<div class="fttHero"><img src="data:image/png;base64,{_logo}"></div>',unsafe_allow_html=True)
+st.markdown("## ✈️ Buscador Inteligente de Passagens")
+st.caption("Pesquise voos, acompanhe preços e compare dinheiro com milhas.")
 
 
 def _pdf_safe(v):
@@ -1039,6 +1059,11 @@ if st.button("🔎 Fazer varredura", type="primary", disabled=not ok):
             reap += int(cached)
             novas += int(not cached)
 
+            # Guarda o Price Insights retornado pela pesquisa para que o gráfico
+            # de 30/60 dias possa ser atualizado apenas clicando no período.
+            if isinstance(d, dict) and d.get("price_insights"):
+                st.session_state["price_insights_raw"] = d.get("price_insights") or {}
+
             for item in all_items(d):
                 s = summarize(item)
                 if s and isinstance(s["preco"], (int,float)) and (volta is None or s["token"]):
@@ -1065,6 +1090,15 @@ if st.button("🔎 Fazer varredura", type="primary", disabled=not ok):
     rows = sorted(rows, key=lambda x:(x["Preço (R$)"], x["Escalas"]))
     st.session_state["rank"] = rows
     st.session_state["uso"] = (novas, reap)
+    st.session_state["ultima_pesquisa"] = {
+        "orig": list(orig),
+        "dest": list(dest),
+        "ida": ida0,
+        "volta": volta0,
+        "adultos": int(adultos),
+        "cabine": cab_pt,
+        "conexoes": stop_pt,
+    }
 
 rank = st.session_state.get("rank", [])
 if rank:
@@ -1076,7 +1110,12 @@ if rank:
 
     menor = rank[0]["Preço (R$)"]
     st.session_state["preco_ref"] = menor
-    salvar_ponto_historico(orig, dest, ida0, volta0, adultos, cab_pt, stop_pt, menor)
+    chave_hist = (
+        tuple(orig), tuple(dest), ida0, volta0, int(adultos), cab_pt, stop_pt, float(menor)
+    )
+    if st.session_state.get("_ultimo_ponto_salvo") != chave_hist:
+        salvar_ponto_historico(orig, dest, ida0, volta0, adultos, cab_pt, stop_pt, menor)
+        st.session_state["_ultimo_ponto_salvo"] = chave_hist
     st.metric("Menor preço encontrado", brl(menor))
 
     top = rank[:20]
@@ -1157,9 +1196,22 @@ st.subheader("2. Histórico de preços")
 periodo_hist = st.radio(
     "Comparar o preço atual com:",
     ["Últimos 30 dias", "Últimos 60 dias"],
-    horizontal=True
+    horizontal=True,
+    key="periodo_historico"
 )
 dias_hist = 30 if periodo_hist == "Últimos 30 dias" else 60
+st.caption("O gráfico é atualizado automaticamente ao trocar entre 30 e 60 dias, usando a última pesquisa realizada.")
+
+# O Streamlit atualiza esta seção automaticamente ao clicar em 30 ou 60 dias.
+# Não é necessário executar uma nova varredura.
+ultima = st.session_state.get("ultima_pesquisa", {})
+hist_orig = ultima.get("orig", orig)
+hist_dest = ultima.get("dest", dest)
+hist_ida = ultima.get("ida", ida0)
+hist_volta = ultima.get("volta", volta0)
+hist_adultos = ultima.get("adultos", int(adultos))
+hist_cabine = ultima.get("cabine", cab_pt)
+hist_conexoes = ultima.get("conexoes", stop_pt)
 
 preco_atual_hist = float(st.session_state.get("preco_ref", 0) or 0)
 insights_raw = st.session_state.get("price_insights_raw", {}) or {}
@@ -1170,7 +1222,8 @@ if insights_raw:
     hist_google, _ = extrair_historico_preco(hist_fake_container, dias_hist)
 
 hist_local = historico_proprio(
-    orig, dest, ida0, volta0, adultos, cab_pt, stop_pt, dias_hist
+    hist_orig, hist_dest, hist_ida, hist_volta,
+    hist_adultos, hist_cabine, hist_conexoes, dias_hist
 )
 
 if preco_atual_hist > 0 and not hist_google.empty:
