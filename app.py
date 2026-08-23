@@ -127,6 +127,16 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+
+st.markdown("""
+<style>
+/* Oculta controles técnicos de cache/toolbar do Streamlit da interface do usuário. */
+[data-testid="stToolbar"] {display:none !important;}
+[data-testid="stStatusWidget"] {display:none !important;}
+#MainMenu {visibility:hidden !important;}
+</style>
+""", unsafe_allow_html=True)
+
 SERPAPI_URL = "https://serpapi.com/search.json"
 BASE = Path.cwd()
 DATA_DIR = BASE / "dados_usuario"
@@ -494,7 +504,7 @@ def salvar_ponto_historico(origens, destinos, ida, volta, adultos, cabine, conex
         "destinos": ",".join(destinos),
         "ida": ida.isoformat(),
         "volta": volta.isoformat() if volta else "",
-        "adultos": int(adultos),
+        "adultos": int(adultos) if adultos else "-",
         "cabine": str(cabine),
         "conexoes": str(conexoes),
         "preco": float(preco),
@@ -1093,7 +1103,7 @@ st.markdown("""
   <a href="#historico">Histórico</a>
   <a href="#relatorios">Relatórios</a>
   <div class="grow"></div>
-  <div class="version">V15.1 Web</div>
+  <div class="version">V15.2 Web</div>
   <div class="avatar">FA</div>
 </div>
 """, unsafe_allow_html=True)
@@ -1116,74 +1126,82 @@ with st.sidebar:
         "destino"
     )
 
-    if "data_ida" not in st.session_state:
-        st.session_state["data_ida"] = date.today() + timedelta(days=30)
-    if "data_volta" not in st.session_state:
-        st.session_state["data_volta"] = date.today() + timedelta(days=37)
-
     tipo_viagem = st.radio(
         "Tipo de viagem",
         ["Só ida", "Ida e volta"],
         horizontal=True,
+        index=None,
         key="tipo_viagem"
     )
 
     ida0 = st.date_input(
         "Data da ida",
+        value=None,
         min_value=date.today(),
         format="DD/MM/YYYY",
         key="data_ida"
     )
 
     if tipo_viagem == "Ida e volta":
-        if st.session_state["data_volta"] < ida0:
-            st.session_state["data_volta"] = ida0 + timedelta(days=7)
-
         volta0 = st.date_input(
             "Data da volta",
-            min_value=ida0,
+            value=None,
+            min_value=ida0 if ida0 else date.today(),
             format="DD/MM/YYYY",
             key="data_volta"
         )
     else:
         volta0 = None
 
-    fi = st.selectbox("Flexibilidade da ida", [0,1,2,3,5,7], index=0)
+    fi = st.selectbox("Flexibilidade da ida", [0,1,2,3,5,7], index=None, placeholder="Selecione")
     if tipo_viagem == "Ida e volta":
-        fv = st.selectbox("Flexibilidade da volta", [0,1,2,3,5,7], index=0)
+        fv = st.selectbox("Flexibilidade da volta", [0,1,2,3,5,7], index=None, placeholder="Selecione")
     else:
         fv = 0
-    adultos = st.number_input("Adultos", 1, 9, 1)
+    adultos = st.selectbox(
+        "Adultos",
+        list(range(1, 10)),
+        index=None,
+        placeholder="Selecione"
+    )
 
-    with st.expander("Filtros avançados"):
+    if True:
         cab_pt = st.selectbox(
             "Cabine",
-            ["Econômica", "Premium Economy", "Executiva", "Primeira"]
+            ["Econômica", "Premium Economy", "Executiva", "Primeira"],
+            index=None,
+            placeholder="Selecione"
         )
         cab = {
             "Econômica": 1,
             "Premium Economy": 2,
             "Executiva": 3,
             "Primeira": 4
-        }[cab_pt]
+        }.get(cab_pt)
 
         stop_pt = st.selectbox(
             "Conexões",
-            ["Qualquer quantidade", "Somente direto", "Até 1 conexão", "Até 2 conexões"]
+            ["Qualquer quantidade", "Somente direto", "Até 1 conexão", "Até 2 conexões"],
+            index=None,
+            placeholder="Selecione"
         )
         stops = {
             "Qualquer quantidade": 0,
             "Somente direto": 1,
             "Até 1 conexão": 2,
             "Até 2 conexões": 3
-        }[stop_pt]
+        }.get(stop_pt)
 
 orig = codigos(orig_txt)
 dest = codigos(dest_txt)
-if volta0:
-    comb = [(i, v) for i in flex(ida0, fi) for v in flex(volta0, fv) if v > i]
-else:
-    comb = [(i, None) for i in flex(ida0, fi)]
+
+comb = []
+if ida0 and fi is not None and adultos and cab is not None and stops is not None:
+    if tipo_viagem == "Ida e volta":
+        if volta0 and fv is not None:
+            comb = [(i, v) for i in flex(ida0, fi) for v in flex(volta0, fv) if v > i]
+    elif tipo_viagem == "Só ida":
+        comb = [(i, None) for i in flex(ida0, fi)]
 
 
 
@@ -1199,15 +1217,10 @@ else:
 st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
 st.subheader("1. Pesquisa de passagens em dinheiro")
-st.caption(
-    "Os resultados são atualizados automaticamente. "
-    "Pesquisas idênticas feitas há menos de 30 minutos podem ser reaproveitadas para economizar consultas."
-)
+pode_pesquisar = bool(orig and dest and comb and tipo_viagem and adultos and cab_pt and stop_pt)
 
-pode_pesquisar = bool(orig and dest and comb)
-
-if not orig or not dest:
-    st.caption("Informe a origem e o destino para liberar a pesquisa.")
+if not pode_pesquisar:
+    st.caption("Preencha os dados da viagem no menu lateral para pesquisar.")
 
 if st.button(
     "Pesquisar passagens",
@@ -1262,7 +1275,7 @@ if st.button(
         "dest": list(dest),
         "ida": ida0,
         "volta": volta0,
-        "adultos": int(adultos),
+        "adultos": int(adultos) if adultos else "-",
         "cabine": cab_pt,
         "conexoes": stop_pt,
     }
@@ -1547,7 +1560,7 @@ def _rota_brasil_argentina(origens, destinos):
     )
 
 def taxa_resgate_referencia(prefixo, origens, destinos, ida, adultos):
-    dias = max((ida - date.today()).days, 0)
+    dias = max((ida - date.today()).days, 0) if ida else 0
     adultos = max(int(adultos), 1)
     nacional = _rota_eh_brasil(origens, destinos)
     brasil_argentina = _rota_brasil_argentina(origens, destinos)
@@ -1910,9 +1923,9 @@ contexto_pdf = {
     "destino": ", ".join(dest) if dest else "-",
     "tipo": "Ida e volta" if volta0 else "Só ida",
     "cabine": cab_pt,
-    "ida": data_br(ida0),
+    "ida": data_br(ida0) if ida0 else "-",
     "volta": data_br(volta0) if volta0 else "-",
-    "adultos": int(adultos),
+    "adultos": int(adultos) if adultos else "-",
     "conexoes": stop_pt,
     "voos": [{k:v for k,v in x.items() if not k.startswith("_")} for x in rank[:20]] if rank else [],
     "preco_atual": float(st.session_state.get("preco_ref",0) or 0),
