@@ -28,7 +28,8 @@ from reportlab.platypus import (
 st.set_page_config(
     page_title="Frederico Travel Tools",
     page_icon="🌐",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
 st.markdown("""
@@ -37,6 +38,47 @@ st.markdown("""
 [data-testid="stDecoration"] {display:none !important;}
 [data-testid="stStatusWidget"] {display:none !important;}
 #MainMenu {visibility:hidden !important;}
+[data-testid="stSidebarCollapseButton"] {display:none !important;}
+[data-testid="collapsedControl"] {display:none !important;}
+[data-testid="stSidebarCollapsedControl"] {display:none !important;}
+</style>
+""", unsafe_allow_html=True)
+
+
+st.markdown("""
+<style>
+[data-testid="stSidebar"] {
+    min-width: 340px !important;
+    max-width: 340px !important;
+}
+[data-testid="stSidebar"] > div:first-child {
+    width: 340px !important;
+}
+.block-container {
+    padding-top: 1rem !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+
+st.markdown("""
+<style>
+[data-testid="stSidebar"] {
+    min-width: 365px !important;
+    max-width: 365px !important;
+    background:#ffffff !important;
+    border-right:1px solid #e5ebf3 !important;
+}
+[data-testid="stSidebar"] > div:first-child { width:365px !important; }
+[data-testid="stSidebarCollapseButton"],
+[data-testid="collapsedControl"],
+[data-testid="stSidebarCollapsedControl"] { display:none !important; }
+[data-testid="stSidebar"] .block-container { padding:16px 18px 18px !important; }
+.block-container { padding-top:0.7rem !important; max-width:1500px !important; }
+div[data-baseweb="select"] > div,
+div[data-baseweb="input"] > div {
+    border-radius:10px !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -963,63 +1005,48 @@ def gerar_relatorio_pdf(contexto):
 # Top navigation / section shortcuts
 st.markdown("""
 <style>
-.fttTopNav{
-  display:flex;align-items:center;justify-content:space-between;gap:18px;
-  background:#fff;border:1px solid #e5ebf3;border-radius:16px;
-  padding:11px 16px;margin:0 0 18px 0;box-shadow:0 4px 16px rgba(8,34,74,.04);
+.fttNavApproved{
+  display:flex;align-items:center;justify-content:center;gap:34px;
+  background:#fff;border-bottom:1px solid #e8edf4;
+  padding:13px 18px;margin:-2px 0 18px;border-radius:0;
 }
-.fttTopNav .brandMini{font-weight:850;color:#08224a;font-size:1.02rem;white-space:nowrap}
-.fttTopNav .links{display:flex;gap:18px;align-items:center;flex-wrap:wrap;justify-content:center;flex:1}
-.fttTopNav a{
-  color:#17325d;text-decoration:none;font-weight:750;font-size:.93rem;
-  padding:7px 10px;border-radius:10px;
+.fttNavApproved a{
+  color:#0c204d;text-decoration:none;font-weight:700;font-size:.94rem;
+  padding:9px 8px 12px;border-bottom:2px solid transparent;
 }
-.fttTopNav a:hover{color:#087CF0;background:#f2f7ff}
-.fttTopRight{display:flex;align-items:center;gap:10px}
-.fttBadge{
-  background:#f2f8ff;color:#087CF0;border:1px solid #d8e7ff;
-  border-radius:999px;padding:6px 10px;font-size:.8rem;font-weight:800;
+.fttNavApproved a:first-child{color:#087CF0;border-bottom-color:#087CF0}
+.fttNavApproved a:hover{color:#087CF0}
+.fttNavApproved .grow{flex:1}
+.fttNavApproved .version{
+  background:#f2f7fd;color:#087CF0;border:1px solid #dde8f6;
+  border-radius:999px;padding:7px 12px;font-weight:800;font-size:.80rem;
 }
-.fttAvatar{
-  width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;
-  background:#087CF0;color:white;font-weight:800;font-size:.82rem;
-}
-@media(max-width:900px){
-  .fttTopNav{align-items:flex-start;flex-direction:column}
-  .fttTopNav .links{justify-content:flex-start}
+.fttNavApproved .avatar{
+  width:36px;height:36px;border-radius:50%;background:#087CF0;color:#fff;
+  display:flex;align-items:center;justify-content:center;font-size:.82rem;font-weight:800;
 }
 </style>
 """, unsafe_allow_html=True)
 
 st.markdown("""
-<div class="fttTopNav">
-  <div class="brandMini">Frederico Travel Tools</div>
-  <div class="links">
-    <a href="#buscador">Buscador</a>
-    <a href="#precos">Preços</a>
-    <a href="#milhas">Milhas</a>
-    <a href="#historico">Histórico</a>
-    <a href="#relatorios">Relatórios</a>
-  </div>
-  <div class="fttTopRight">
-    <div class="fttBadge">V13.1 Web</div>
-    <div class="fttAvatar">FA</div>
-  </div>
+<div class="fttNavApproved">
+  <a href="#buscador">Buscador</a>
+  <a href="#precos">Preços</a>
+  <a href="#milhas">Milhas</a>
+  <a href="#historico">Histórico</a>
+  <a href="#relatorios">Relatórios</a>
+  <div class="grow"></div>
+  <div class="version">V14.0 Web</div>
+  <div class="avatar">FA</div>
 </div>
 """, unsafe_allow_html=True)
 
 with st.sidebar:
-    if _logo:
-        st.markdown(
-            f"""
-            <div style="padding:4px 8px 12px;text-align:center;">
-              <img src="data:image/png;base64,{_logo}"
-                   style="width:100%;max-width:240px;height:auto;object-fit:contain;">
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
+    marca_sidebar = BASE / "assets" / "marca_sidebar_aprovada.png"
+    if marca_sidebar.exists():
+        st.image(str(marca_sidebar), width="stretch")
     st.markdown("### Nova pesquisa")
+
     st.caption("Origem, destino e datas em poucos passos.")
 
     orig_txt = campo_aeroporto_inteligente(
@@ -1103,55 +1130,17 @@ else:
 
 
 
+
+
 st.markdown('<div id="buscador"></div>', unsafe_allow_html=True)
-
-hero_left, hero_right = st.columns([1.05, 0.95], gap="large")
-
-with hero_left:
-    st.markdown(
-        """
-        <div style="
-            background:linear-gradient(135deg,#ffffff 0%,#f3f8ff 100%);
-            border:1px solid #dfe7f0;
-            border-radius:20px;
-            padding:28px 30px 24px;
-            min-height:300px;
-            box-shadow:0 10px 28px rgba(8,34,74,.05);
-        ">
-          <div style="font-size:42px;line-height:1.02;font-weight:850;color:#0a1f4d;letter-spacing:-0.04em;">
-            Buscador Inteligente<br>
-            <span style="color:#087CF0;">de Passagens</span>
-          </div>
-          <div style="font-size:17px;color:#607089;margin-top:14px;line-height:1.45;">
-            Pesquise voos, acompanhe preços e compare dinheiro com milhas.
-          </div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:24px;">
-            <div style="background:#fff;border:1px solid #dfe7f0;border-radius:12px;padding:10px 12px;">
-              <b style="color:#0a1f4d;">Encontre</b><br><span style="color:#718096;font-size:13px;">as melhores opções</span>
-            </div>
-            <div style="background:#fff;border:1px solid #dfe7f0;border-radius:12px;padding:10px 12px;">
-              <b style="color:#0a1f4d;">Compare</b><br><span style="color:#718096;font-size:13px;">preços e datas</span>
-            </div>
-            <div style="background:#fff;border:1px solid #dfe7f0;border-radius:12px;padding:10px 12px;">
-              <b style="color:#0a1f4d;">Analise</b><br><span style="color:#718096;font-size:13px;">uso de milhas</span>
-            </div>
-            <div style="background:#fff;border:1px solid #dfe7f0;border-radius:12px;padding:10px 12px;">
-              <b style="color:#0a1f4d;">Planeje</b><br><span style="color:#718096;font-size:13px;">sua próxima viagem</span>
-            </div>
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-with hero_right:
-    hero_path = BASE / "assets" / "hero_aviao_moderno.png"
-    if hero_path.exists():
-        st.image(str(hero_path), width="stretch")
-    else:
-        st.info("Imagem principal não encontrada em assets/hero_aviao_moderno.png.")
-
+hero_aprovado = BASE / "assets" / "hero_layout_aprovado.png"
+if hero_aprovado.exists():
+    st.image(str(hero_aprovado), width="stretch")
+else:
+    st.markdown("## Buscador Inteligente de Passagens")
+    st.caption("Pesquise voos, acompanhe preços e compare dinheiro com milhas.")
 st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+
 st.subheader("1. Pesquisa de passagens em dinheiro")
 st.info(
     f"A pesquisa pode consumir no máximo **{len(comb)} consulta(s)** novas. "
@@ -1161,7 +1150,7 @@ st.info(
 ok = st.checkbox(f"Confirmo a pesquisa de até {len(comb)} consulta(s)")
 force = st.checkbox("Ignorar cache e consultar novamente")
 
-if st.button("Fazer varredura", type="primary", disabled=not ok, width="stretch"):
+if st.button("Fazer varredura", type="primary", disabled=not ok):
     rows = []
     novas = reap = 0
     prog = st.progress(0)
