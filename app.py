@@ -6,6 +6,10 @@ from pathlib import Path
 
 import pandas as pd
 import altair as alt
+try:
+    import airportsdata
+except Exception:
+    airportsdata = None
 import requests
 import streamlit as st
 
@@ -463,7 +467,7 @@ def grafico_historico_google_style(df, preco_atual=None):
     )
 
 st.title("✈️ Buscador Inteligente de Passagens")
-st.caption("Versão 11.2 Web — tabela fixa com links oficiais por cabine + histórico estilo Google Flights + busca por cidade")
+st.caption("Versão 11.3 Web — origem/destino inteligentes por cidade ou código + tabela fixa por cabine + histórico estilo Google Flights")
 
 if api_key():
     st.success("SerpApi conectada.")
@@ -471,108 +475,162 @@ else:
     st.error("SERPAPI_API_KEY não encontrada.")
 
 
-AEROPORTOS = {
-    "Goiânia": [("GYN", "Aeroporto de Goiânia - Santa Genoveva")],
-    "Brasília": [("BSB", "Aeroporto Internacional de Brasília")],
-    "São Paulo": [
-        ("GRU", "Aeroporto Internacional de São Paulo/Guarulhos"),
-        ("CGH", "Aeroporto de Congonhas"),
-        ("VCP", "Aeroporto Internacional de Viracopos")
-    ],
-    "Rio de Janeiro": [
-        ("GIG", "Aeroporto Internacional do Rio de Janeiro/Galeão"),
-        ("SDU", "Aeroporto Santos Dumont")
-    ],
-    "Belo Horizonte": [
-        ("CNF", "Aeroporto Internacional de Belo Horizonte/Confins"),
-        ("PLU", "Aeroporto da Pampulha")
-    ],
-    "Buenos Aires": [
-        ("EZE", "Aeroporto Internacional Ministro Pistarini/Ezeiza"),
-        ("AEP", "Aeroparque Jorge Newbery")
-    ],
-    "Santiago": [("SCL", "Aeroporto Internacional Arturo Merino Benítez")],
-    "Lima": [("LIM", "Aeroporto Internacional Jorge Chávez")],
-    "Bogotá": [("BOG", "Aeroporto Internacional El Dorado")],
-    "Montevidéu": [("MVD", "Aeroporto Internacional de Carrasco")],
-    "Assunção": [("ASU", "Aeroporto Internacional Silvio Pettirossi")],
-    "Curitiba": [("CWB", "Aeroporto Internacional Afonso Pena")],
-    "Porto Alegre": [("POA", "Aeroporto Internacional Salgado Filho")],
-    "Recife": [("REC", "Aeroporto Internacional do Recife/Guararapes")],
-    "Salvador": [("SSA", "Aeroporto Internacional de Salvador")],
-    "Fortaleza": [("FOR", "Aeroporto Internacional de Fortaleza")],
-    "Florianópolis": [("FLN", "Aeroporto Internacional Hercílio Luz")],
-    "Manaus": [("MAO", "Aeroporto Internacional Eduardo Gomes")],
-}
 
-def opcoes_aeroportos(termo):
-    termo = (termo or "").strip().lower()
+# Base mundial de aeroportos IATA. Se o pacote não carregar, mantém alguns
+# aeroportos essenciais como fallback para o app continuar funcionando.
+@st.cache_resource
+def carregar_aeroportos():
+    registros = []
+    if airportsdata is not None:
+        try:
+            dados = airportsdata.load("IATA")
+            for codigo, info in dados.items():
+                cidade = (info.get("city") or "").strip()
+                nome = (info.get("name") or "").strip()
+                pais = (info.get("country") or "").strip()
+                if codigo and (cidade or nome):
+                    registros.append({
+                        "codigo": codigo.upper(),
+                        "cidade": cidade,
+                        "nome": nome,
+                        "pais": pais,
+                    })
+        except Exception:
+            registros = []
+
+    if not registros:
+        fallback = [
+            ("GYN","Goiânia","Santa Genoveva Airport","BR"),
+            ("BSB","Brasília","Presidente Juscelino Kubitschek International Airport","BR"),
+            ("GRU","São Paulo","São Paulo/Guarulhos International Airport","BR"),
+            ("CGH","São Paulo","Congonhas Airport","BR"),
+            ("VCP","Campinas","Viracopos International Airport","BR"),
+            ("GIG","Rio de Janeiro","Rio de Janeiro/Galeão International Airport","BR"),
+            ("SDU","Rio de Janeiro","Santos Dumont Airport","BR"),
+            ("EZE","Buenos Aires","Ministro Pistarini International Airport","AR"),
+            ("AEP","Buenos Aires","Aeroparque Jorge Newbery","AR"),
+            ("LIM","Lima","Jorge Chávez International Airport","PE"),
+            ("SCL","Santiago","Arturo Merino Benítez International Airport","CL"),
+            ("BOG","Bogotá","El Dorado International Airport","CO"),
+            ("MVD","Montevideo","Carrasco International Airport","UY"),
+            ("ASU","Asunción","Silvio Pettirossi International Airport","PY"),
+        ]
+        registros = [
+            {"codigo": c, "cidade": ci, "nome": n, "pais": p}
+            for c, ci, n, p in fallback
+        ]
+    return registros
+
+AEROPORTOS_MUNDO = carregar_aeroportos()
+
+def buscar_aeroportos_inteligente(termo, limite=12):
+    termo = (termo or "").strip()
     if not termo:
         return []
-    achados = []
-    for cidade, aeroportos in AEROPORTOS.items():
-        for codigo, nome in aeroportos:
-            texto = f"{cidade} {codigo} {nome}".lower()
-            if termo in texto:
-                achados.append((cidade, codigo, nome))
-    return achados
 
-def formatar_aeroporto(item):
-    cidade, codigo, nome = item
-    return f"{cidade} — {codigo} — {nome}"
+    q = termo.casefold()
+    exatos = []
+    cidade_inicio = []
+    outros = []
+
+    for a in AEROPORTOS_MUNDO:
+        codigo = a["codigo"]
+        cidade = a["cidade"]
+        nome = a["nome"]
+        pais = a["pais"]
+
+        if codigo.casefold() == q:
+            exatos.append(a)
+            continue
+
+        cidade_cf = cidade.casefold()
+        texto = f"{codigo} {cidade} {nome} {pais}".casefold()
+
+        if cidade_cf == q or cidade_cf.startswith(q):
+            cidade_inicio.append(a)
+        elif q in texto:
+            outros.append(a)
+
+    # Prioriza código exato, depois cidade e só então outras correspondências.
+    resultado = exatos + cidade_inicio + outros
+
+    # Remove duplicados preservando a ordem.
+    vistos = set()
+    final = []
+    for a in resultado:
+        if a["codigo"] not in vistos:
+            final.append(a)
+            vistos.add(a["codigo"])
+        if len(final) >= limite:
+            break
+    return final
+
+def rotulo_aeroporto(a):
+    cidade = a["cidade"] or "Cidade não informada"
+    pais = f" · {a['pais']}" if a.get("pais") else ""
+    return f"{cidade} — {a['codigo']} — {a['nome']}{pais}"
+
+def campo_aeroporto_inteligente(titulo, valor_inicial, key_prefix):
+    termo = st.text_input(
+        titulo,
+        value=valor_inicial,
+        key=f"{key_prefix}_busca",
+        help="Digite uma cidade (ex.: Lima, São Paulo) ou um código IATA (ex.: LIM, CGH)."
+    )
+
+    resultados = buscar_aeroportos_inteligente(termo)
+
+    if not termo.strip():
+        return ""
+
+    # Código IATA exato: seleciona automaticamente.
+    exato = [a for a in resultados if a["codigo"].casefold() == termo.strip().casefold()]
+    if exato:
+        a = exato[0]
+        st.caption(f"Selecionado: {rotulo_aeroporto(a)}")
+        return a["codigo"]
+
+    if not resultados:
+        st.warning("Nenhum aeroporto encontrado. Tente o nome da cidade ou o código IATA.")
+        return ""
+
+    # Se há só um aeroporto correspondente, usa automaticamente.
+    if len(resultados) == 1:
+        a = resultados[0]
+        st.caption(f"Selecionado: {rotulo_aeroporto(a)}")
+        return a["codigo"]
+
+    # Para cidades com vários aeroportos, mostra opções clicáveis.
+    selecionados = st.multiselect(
+        f"Aeroportos encontrados para “{termo}”",
+        options=resultados,
+        default=resultados if len(resultados) <= 3 else [],
+        format_func=rotulo_aeroporto,
+        key=f"{key_prefix}_selecionados",
+        help="Você pode selecionar um ou vários aeroportos da mesma cidade."
+    )
+
+    if not selecionados:
+        st.caption("Selecione pelo menos um aeroporto acima.")
+        return ""
+
+    return ",".join(a["codigo"] for a in selecionados)
 
 with st.sidebar:
     st.header("Pesquisa aérea")
+    st.caption("Digite cidade ou código IATA no mesmo campo.")
 
-    st.caption("Você pode informar o código do aeroporto ou procurar pela cidade.")
-
-    modo_origem = st.radio(
-        "Como deseja informar a origem?",
-        ["Código(s) do aeroporto", "Buscar por cidade"],
-        horizontal=True,
-        key="modo_origem"
+    orig_txt = campo_aeroporto_inteligente(
+        "Origem",
+        "Goiânia",
+        "origem"
     )
 
-    if modo_origem == "Código(s) do aeroporto":
-        orig_txt = st.text_input("Origens", "GYN,BSB")
-    else:
-        termo_o = st.text_input("Digite a cidade de origem", "Goiânia")
-        op_o = opcoes_aeroportos(termo_o)
-        if op_o:
-            sel_o = st.multiselect(
-                "Selecione o(s) aeroporto(s) de origem",
-                options=op_o,
-                default=op_o,
-                format_func=formatar_aeroporto
-            )
-            orig_txt = ",".join([x[1] for x in sel_o])
-        else:
-            st.warning("Nenhum aeroporto cadastrado encontrado para essa cidade.")
-            orig_txt = ""
-
-    modo_destino = st.radio(
-        "Como deseja informar o destino?",
-        ["Código(s) do aeroporto", "Buscar por cidade"],
-        horizontal=True,
-        key="modo_destino"
+    dest_txt = campo_aeroporto_inteligente(
+        "Destino",
+        "Buenos Aires",
+        "destino"
     )
-
-    if modo_destino == "Código(s) do aeroporto":
-        dest_txt = st.text_input("Destinos", "EZE,AEP")
-    else:
-        termo_d = st.text_input("Digite a cidade de destino", "Buenos Aires")
-        op_d = opcoes_aeroportos(termo_d)
-        if op_d:
-            sel_d = st.multiselect(
-                "Selecione o(s) aeroporto(s) de destino",
-                options=op_d,
-                default=op_d,
-                format_func=formatar_aeroporto
-            )
-            dest_txt = ",".join([x[1] for x in sel_d])
-        else:
-            st.warning("Nenhum aeroporto cadastrado encontrado para essa cidade.")
-            dest_txt = ""
 
     if "data_ida" not in st.session_state:
         st.session_state["data_ida"] = date.today() + timedelta(days=30)
