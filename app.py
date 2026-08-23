@@ -21,8 +21,16 @@ SALDOS_FILE = DATA_DIR / "meus_saldos.json"
 CACHE_DIR = BASE / "cache_buscas"
 CACHE_DIR.mkdir(exist_ok=True)
 
+def _secret_or_env(name, default=""):
+    try:
+        if name in st.secrets:
+            return str(st.secrets[name]).strip()
+    except Exception:
+        pass
+    return os.getenv(name, default).strip()
+
 def api_key():
-    return os.getenv("SERPAPI_API_KEY", "").strip()
+    return _secret_or_env("SERPAPI_API_KEY")
 
 def brl(v):
     try:
@@ -64,8 +72,7 @@ def load_saldos():
     if "saldos_usuario" not in st.session_state:
         def _num_secret(nome, padrao):
             try:
-                val = _secret_or_env(nome, str(padrao))
-                return int(float(val))
+                return int(float(_secret_or_env(nome, str(padrao))))
             except Exception:
                 return int(padrao)
 
@@ -82,7 +89,6 @@ def save_saldos(d):
         "Smiles": int(d["Smiles"]),
         "Azul Fidelidade": int(d["Azul Fidelidade"]),
     }
-
 
 def codigos(txt):
     out = []
@@ -836,3 +842,4 @@ st.divider()
 st.caption(
     "Preços, disponibilidade e regras dos programas de fidelidade devem ser confirmados antes da compra ou emissão."
 )
+ 
