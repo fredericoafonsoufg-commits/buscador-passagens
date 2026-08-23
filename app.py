@@ -44,43 +44,6 @@ st.markdown("""
 
 st.markdown("""
 <style>
-[data-testid="stSidebar"] {
-    min-width: 340px !important;
-    max-width: 340px !important;
-}
-[data-testid="stSidebar"] > div:first-child {
-    width: 340px !important;
-}
-.block-container {
-    padding-top: 1rem !important;
-}
-</style>
-""", unsafe_allow_html=True)
-
-
-st.markdown("""
-<style>
-[data-testid="stSidebar"] {
-    min-width: 365px !important;
-    max-width: 365px !important;
-    background:#ffffff !important;
-    border-right:1px solid #e5ebf3 !important;
-}
-[data-testid="stSidebar"] > div:first-child { width:365px !important; }
-[data-testid="stSidebarCollapseButton"],
-[data-testid="collapsedControl"],
-[data-testid="stSidebar"] .block-container { padding:16px 18px 18px !important; }
-.block-container { padding-top:0.7rem !important; max-width:1500px !important; }
-div[data-baseweb="select"] > div,
-div[data-baseweb="input"] > div {
-    border-radius:10px !important;
-}
-</style>
-""", unsafe_allow_html=True)
-
-
-st.markdown("""
-<style>
 /* Sidebar: abre expandida; se for recolhida, o botão de reabrir permanece visível. */
 [data-testid="stSidebar"] {
     min-width: 365px !important;
@@ -120,6 +83,34 @@ div[class*="ManageApp"] {
 /* Mantém o cabeçalho discreto sem esconder o botão de reabrir a lateral. */
 header[data-testid="stHeader"] {
     background: transparent !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+
+st.markdown("""
+<style>
+/* Sidebar limpa e estável: usa a largura nativa do Streamlit. */
+[data-testid="stSidebar"] {
+    background:#ffffff !important;
+    border-right:1px solid #e5ebf3 !important;
+}
+[data-testid="stSidebar"] .block-container {
+    padding-top:1rem !important;
+    padding-left:1.1rem !important;
+    padding-right:1.1rem !important;
+}
+/* Mantém os controles nativos para recolher/reabrir a lateral. */
+[data-testid="stSidebarCollapseButton"],
+[data-testid="collapsedControl"],
+[data-testid="stSidebarCollapsedControl"] {
+    visibility:visible !important;
+    opacity:1 !important;
+}
+/* Conteúdo principal */
+.block-container {
+    padding-top:0.8rem !important;
+    max-width:1500px !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -1078,7 +1069,7 @@ st.markdown("""
   <a href="#historico">Histórico</a>
   <a href="#relatorios">Relatórios</a>
   <div class="grow"></div>
-  <div class="version">V14.1 Web</div>
+  <div class="version">V14.2 Web</div>
   <div class="avatar">FA</div>
 </div>
 """, unsafe_allow_html=True)
