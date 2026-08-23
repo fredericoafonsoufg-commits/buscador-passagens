@@ -31,6 +31,15 @@ st.set_page_config(
     layout="wide"
 )
 
+st.markdown("""
+<style>
+[data-testid="stToolbar"] {display:none !important;}
+[data-testid="stDecoration"] {display:none !important;}
+[data-testid="stStatusWidget"] {display:none !important;}
+#MainMenu {visibility:hidden !important;}
+</style>
+""", unsafe_allow_html=True)
+
 SERPAPI_URL = "https://serpapi.com/search.json"
 BASE = Path.cwd()
 DATA_DIR = BASE / "dados_usuario"
@@ -670,13 +679,11 @@ div[data-testid="stDownloadButton"]>button:hover{
     background:#0668CC!important;color:#fff!important;border-color:#0668CC!important;
 }
 .fttHero{background:#fff;border:1px solid var(--line);border-radius:20px;padding:18px 22px;margin:4px 0 22px;box-shadow:0 8px 28px rgba(8,34,74,.05);overflow:visible}
-.fttHero img{display:block;width:min(610px,94%);height:auto;margin:auto;object-fit:contain}
+.fttHero img{display:block;width:min(560px,92%);height:auto;margin:auto;object-fit:contain}
 .fttFooter{margin-top:38px;padding:20px 4px 8px;border-top:1px solid var(--line);text-align:center;color:#718096;font-size:.88rem}
 </style>
 """,unsafe_allow_html=True)
 _logo=_ftt_b64(BASE/"assets"/"frederico_travel_tools_logo.png")
-if _logo:
-    st.markdown(f'<div class="fttHero"><img src="data:image/png;base64,{_logo}"></div>',unsafe_allow_html=True)
 st.markdown("## ✈️ Buscador Inteligente de Passagens")
 st.caption("Pesquise voos, acompanhe preços e compare dinheiro com milhas.")
 
@@ -957,6 +964,27 @@ def gerar_relatorio_pdf(contexto):
 
 
 with st.sidebar:
+    if _logo:
+        st.markdown(
+            f"""
+            <div style="
+                background:#ffffff;
+                border:1px solid #e5ebf3;
+                border-radius:16px;
+                padding:10px 12px;
+                margin:0 0 16px 0;
+                box-shadow:0 4px 14px rgba(8,34,74,.04);
+                text-align:center;
+            ">
+                <img
+                    src="data:image/png;base64,{_logo}"
+                    style="width:100%;max-width:265px;height:auto;object-fit:contain;display:block;margin:auto;"
+                >
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
     st.markdown("### ✈️ Nova pesquisa")
     st.caption("Origem, destino e datas em poucos passos.")
 
