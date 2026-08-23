@@ -467,7 +467,7 @@ def grafico_historico_google_style(df, preco_atual=None):
     )
 
 st.title("✈️ Buscador Inteligente de Passagens")
-st.caption("Versão 11.3 Web — origem/destino inteligentes por cidade ou código + tabela fixa por cabine + histórico estilo Google Flights")
+st.caption("Versão 11.5 Web — campo único de cidade/aeroporto + histórico + milhas + tabela fixa")
 
 if api_key():
     st.success("SerpApi conectada.")
@@ -570,51 +570,36 @@ def rotulo_aeroporto(a):
     pais = f" · {a['pais']}" if a.get("pais") else ""
     return f"{cidade} — {a['codigo']} — {a['nome']}{pais}"
 
-def campo_aeroporto_inteligente(titulo, valor_inicial, key_prefix):
-    termo = st.text_input(
+
+def agrupar_resultados_aeroportos(resultados):
+    grupos = {}
+    for a in resultados:
+        cidade = a.get("cidade") or "Outros"
+        grupos.setdefault(cidade, []).append(a)
+    return grupos
+
+
+def campo_aeroporto_inteligente(titulo, key_prefix):
+    opcoes = AEROPORTOS_MUNDO
+
+    escolhidos = st.multiselect(
         titulo,
-        value=valor_inicial,
-        key=f"{key_prefix}_busca",
-        help="Digite uma cidade (ex.: Lima, São Paulo) ou um código IATA (ex.: LIM, CGH)."
-    )
-
-    resultados = buscar_aeroportos_inteligente(termo)
-
-    if not termo.strip():
-        return ""
-
-    # Código IATA exato: seleciona automaticamente.
-    exato = [a for a in resultados if a["codigo"].casefold() == termo.strip().casefold()]
-    if exato:
-        a = exato[0]
-        st.caption(f"Selecionado: {rotulo_aeroporto(a)}")
-        return a["codigo"]
-
-    if not resultados:
-        st.warning("Nenhum aeroporto encontrado. Tente o nome da cidade ou o código IATA.")
-        return ""
-
-    # Se há só um aeroporto correspondente, usa automaticamente.
-    if len(resultados) == 1:
-        a = resultados[0]
-        st.caption(f"Selecionado: {rotulo_aeroporto(a)}")
-        return a["codigo"]
-
-    # Para cidades com vários aeroportos, mostra opções clicáveis.
-    selecionados = st.multiselect(
-        f"Aeroportos encontrados para “{termo}”",
-        options=resultados,
-        default=resultados if len(resultados) <= 3 else [],
+        options=opcoes,
+        default=[],
         format_func=rotulo_aeroporto,
-        key=f"{key_prefix}_selecionados",
-        help="Você pode selecionar um ou vários aeroportos da mesma cidade."
+        key=f"{key_prefix}_aeroportos",
+        placeholder="Digite cidade ou código IATA",
+        help=(
+            "Digite no próprio campo o nome da cidade ou o código do aeroporto. "
+            "Ex.: Rio de Janeiro, GIG, São Paulo, CGH, Lima, LIM."
+        )
     )
 
-    if not selecionados:
-        st.caption("Selecione pelo menos um aeroporto acima.")
+    if not escolhidos:
         return ""
 
-    return ",".join(a["codigo"] for a in selecionados)
+    codigos = [a["codigo"] for a in escolhidos]
+    return ",".join(codigos)
 
 with st.sidebar:
     st.header("Pesquisa aérea")
@@ -622,13 +607,11 @@ with st.sidebar:
 
     orig_txt = campo_aeroporto_inteligente(
         "Origem",
-        "Goiânia",
         "origem"
     )
 
     dest_txt = campo_aeroporto_inteligente(
         "Destino",
-        "Buenos Aires",
         "destino"
     )
 
