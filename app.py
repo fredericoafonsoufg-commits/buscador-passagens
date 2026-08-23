@@ -408,13 +408,13 @@ def classificar_preco_atual(preco_atual, historico_df, insights):
             diferenca_pct = ((preco_atual - media) / media * 100) if media else 0
 
             if preco_atual <= minimo * 1.05:
-                nivel = "Muito baixo"
+                nivel = "🟢 Bom preço"
             elif preco_atual < media * 0.90:
-                nivel = "Baixo"
+                nivel = "🟢 Bom preço"
             elif preco_atual <= media * 1.10:
-                nivel = "Na média"
+                nivel = "🟡 Preço normal"
             else:
-                nivel = "Alto"
+                nivel = "🔴 Preço alto"
 
             return {
                 "nivel": nivel,
@@ -427,9 +427,9 @@ def classificar_preco_atual(preco_atual, historico_df, insights):
 
     nivel_google = (insights or {}).get("price_level")
     mapa = {
-        "low": "Baixo",
-        "typical": "Na média",
-        "high": "Alto"
+        "low": "🟢 Bom preço",
+        "typical": "🟡 Preço normal",
+        "high": "🔴 Preço alto"
     }
     return {
         "nivel": mapa.get(nivel_google, "Sem histórico suficiente"),
@@ -1093,7 +1093,7 @@ st.markdown("""
   <a href="#historico">Histórico</a>
   <a href="#relatorios">Relatórios</a>
   <div class="grow"></div>
-  <div class="version">V15.0 Web</div>
+  <div class="version">V15.1 Web</div>
   <div class="avatar">FA</div>
 </div>
 """, unsafe_allow_html=True)
@@ -1399,27 +1399,23 @@ if preco_atual_hist > 0 and not hist_google.empty:
     st.caption("Histórico de preços atualizado.")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Preço atual", brl(preco_atual_hist))
-    c2.metric("Classificação", analise["nivel"])
+    c2.metric("Avaliação do preço", analise["nivel"])
     c3.metric("Média do período", brl(analise["media"]))
-    c4.metric("Diferença para a média", f"{analise['diferenca_pct']:+.1f}%")
+    sentido_media = "acima" if analise["diferenca_pct"] >= 0 else "abaixo"
+    c4.metric("Comparação com a média", f"{abs(analise['diferenca_pct']):.1f}% {sentido_media}")
 
     graf = hist_google.copy()
     graf["Data"] = pd.to_datetime(graf["Data"])
     graf = graf.set_index("Data")
     graf["Preço atual"] = preco_atual_hist
     grafico_historico_google_style(graf.reset_index(), preco_atual_hist)
-    st.caption(f"Referência atual: {brl(preco_atual_hist)} · Média: {brl(analise['media'])}")
-
     st.caption(
-        f"No período selecionado: mínimo {brl(analise['minimo'])}, "
-        f"mediana {brl(analise['mediana'])} e máximo {brl(analise['maximo'])}."
+        f"Faixa de preços no período: menor {brl(analise['minimo'])} · "
+        f"maior {brl(analise['maximo'])}"
     )
 
 elif preco_atual_hist > 0 and not hist_local.empty:
-    st.info(
-        "Histórico de preços atualizado automaticamente. "
-        "O gráfico abaixo usa o histórico próprio das pesquisas feitas neste aplicativo."
-    )
+    st.caption("Histórico de preços atualizado.")
     h = hist_local.copy()
     h["capturado_em"] = pd.to_datetime(h["capturado_em"])
     h = h.rename(columns={"capturado_em":"Data", "preco":"Preço (R$)"}).set_index("Data")
@@ -1430,29 +1426,28 @@ elif preco_atual_hist > 0 and not hist_local.empty:
 
     c1,c2,c3,c4 = st.columns(4)
     c1.metric("Preço atual", brl(preco_atual_hist))
-    c2.metric("Média observada", brl(media))
-    c3.metric("Menor observado", brl(minimo))
-    c4.metric("Diferença para a média", f"{diferenca:+.1f}%")
+    if diferenca < -10:
+        avaliacao_local = "🟢 Bom preço"
+    elif diferenca <= 10:
+        avaliacao_local = "🟡 Preço normal"
+    else:
+        avaliacao_local = "🔴 Preço alto"
+    c2.metric("Avaliação do preço", avaliacao_local)
+    c3.metric("Média do período", brl(media))
+    sentido_local = "acima" if diferenca >= 0 else "abaixo"
+    c4.metric("Comparação com a média", f"{abs(diferenca):.1f}% {sentido_local}")
 
     h["Preço atual"] = preco_atual_hist
     grafico_historico_google_style(h.reset_index(), preco_atual_hist)
-    st.caption(f"Referência atual: {brl(preco_atual_hist)} · Média observada: {brl(media)}")
+    st.caption(
+        f"Faixa de preços no período: menor {brl(minimo)} · maior {brl(maximo)}"
+    )
 
-    if len(h) < 3:
-        st.caption(
-            "Ainda há poucos registros próprios para uma avaliação robusta. "
-            "O histórico melhora à medida que você repete pesquisas da mesma viagem ao longo dos dias."
-        )
 else:
     st.info(
         "Ainda não há histórico suficiente para esta pesquisa. "
         "A partir de agora, cada pesquisa concluída salva o menor preço encontrado para formar seu histórico."
     )
-
-st.caption(
-    "Observação: no Streamlit Community Cloud, o armazenamento local pode ser reiniciado em atualizações ou reinícios do aplicativo. "
-    "Por isso, o histórico próprio é complementar; quando histórico de preços estiver disponível, ele é priorizado."
-)
 
 
 st.divider()
