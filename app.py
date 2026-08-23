@@ -1,5 +1,6 @@
  
 import os, json, hashlib, statistics, hmac
+from urllib.parse import quote
 from datetime import date, timedelta, datetime
 from pathlib import Path
 
@@ -203,12 +204,24 @@ def fixed_table_rule(origens, destinos):
             "rota": "Brasil ↔ Argentina",
             "por_trecho": 24000,
             "ida_volta": 48000,
+            "tipo_verificacao": "whatsapp",
+            "contato_label": "📱 Verificar disponibilidade no WhatsApp LATAM",
+            "contato_base": "https://api.whatsapp.com/send/?app_absent=0&phone=56968250850&text={mensagem}&type=phone_number",
+            "regras_label": "📋 Abrir regras oficiais da tabela fixa",
+            "regras_url": "https://latampass.latam.com/pt_br/viagem/usar-milhas-para-voar/regras-de-resgate/latam",
+            "orientacao": (
+                "Peça ao atendimento para confirmar especificamente disponibilidade "
+                "de assento em companhia parceira pela tabela fixa LATAM Pass."
+            ),
             "observacao": (
                 "Regra de referência cadastrada para esta rota. "
                 "Confirme elegibilidade, companhia parceira, disponibilidade "
                 "e regra vigente antes da emissão."
             )
         }
+
+    # Novas tabelas fixas de outros programas devem ser cadastradas aqui
+    # com programa, rota, milhas, contato/site oficial e URL das regras.
     return None
 
 
@@ -377,7 +390,7 @@ def historico_proprio(origens, destinos, ida, volta, adultos, cabine, conexoes, 
         return pd.DataFrame()
 
 st.title("✈️ Buscador Inteligente de Passagens")
-st.caption("Versão 10.4 Web — gráfico em barras + referências do milheiro + tabela fixa com confirmação de disponibilidade")
+st.caption("Versão 10.7 Web — taxas automáticas + preço máximo do milheiro + tabela fixa com verificação")
 
 if api_key():
     st.success("SerpApi conectada.")
@@ -694,6 +707,68 @@ st.caption(
     "Se você fizer uma busca acima, o menor preço encontrado será usado automaticamente como referência."
 )
 
+
+def _rota_eh_brasil(origens, destinos):
+    return bool(set(origens) & BRAZIL_AIRPORTS) and bool(set(destinos) & BRAZIL_AIRPORTS)
+
+def _rota_brasil_argentina(origens, destinos):
+    o = set(origens)
+    d = set(destinos)
+    return (
+        (bool(o & BRAZIL_AIRPORTS) and bool(d & ARGENTINA_AIRPORTS))
+        or
+        (bool(d & BRAZIL_AIRPORTS) and bool(o & ARGENTINA_AIRPORTS))
+    )
+
+def taxa_resgate_referencia(prefixo, origens, destinos, ida, adultos):
+    dias = max((ida - date.today()).days, 0)
+    adultos = max(int(adultos), 1)
+    nacional = _rota_eh_brasil(origens, destinos)
+    brasil_argentina = _rota_brasil_argentina(origens, destinos)
+
+    if prefixo == "LATAM":
+        if nacional:
+            if dias >= 90:
+                return 0.0, "Automática: isenta pela antecedência de 90 dias ou mais."
+            return 34.0 * adultos, (
+                "Automática: R$ 34,00 ida e volta por passageiro em resgate nacional "
+                "feito com menos de 90 dias."
+            )
+        if brasil_argentina:
+            if dias >= 120:
+                return 0.0, "Automática: isenta pela antecedência de 120 dias ou mais."
+            return 94.68 * adultos, (
+                "Automática: referência publicada de R$ 94,68 ida e volta por passageiro "
+                "para América do Sul com menos de 120 dias."
+            )
+        if dias >= 120:
+            return 0.0, "Automática: isenta pela antecedência de 120 dias ou mais."
+        return 220.92 * adultos, (
+            "Automática: referência publicada de R$ 220,92 ida e volta por passageiro "
+            "para demais voos internacionais com menos de 120 dias."
+        )
+
+    if prefixo == "AZUL":
+        if dias >= 90:
+            return 0.0, "Automática: referência de isenção para emissão com 90 dias ou mais."
+        if nacional:
+            return 69.80 * adultos, (
+                "Automática: a partir de R$ 34,90 por passageiro/trecho no site/app "
+                "(R$ 69,80 ida e volta)."
+            )
+        return 237.80 * adultos, (
+            "Automática: a partir de R$ 118,90 por passageiro/trecho internacional "
+            "no site/app (R$ 237,80 ida e volta)."
+        )
+
+    if prefixo == "SMILES":
+        return 0.0, (
+            "Variável: a Smiles não publica uma taxa única aplicável a toda emissão. "
+            "Confirme o valor no checkout e ajuste este campo."
+        )
+
+    return 0.0, "Taxa não cadastrada automaticamente."
+
 def _secret_float(nome, padrao):
     try:
         return float(_secret_or_env(nome, str(padrao)).replace(",", "."))
@@ -705,6 +780,12 @@ programas = [
     ("LATAM Pass dinâmica", lat, "LATAM"),
     ("Azul Fidelidade", azu, "AZUL")
 ]
+
+st.markdown("### Taxas de resgate e emissão")
+st.caption(
+    "Quando existe regra pública objetiva, o aplicativo calcula uma referência automaticamente. "
+    "Smiles permanece variável. Taxas aeroportuárias/embarque e cobranças de parceiras podem ser adicionais."
+)
 
 st.markdown("### Valores de referência do milheiro")
 st.caption(
@@ -735,14 +816,22 @@ for i, (nome, saldo, prefixo) in enumerate(programas):
             key=f"r{i}",
             help="Quantidade total de milhas/pontos que o programa está cobrando pela emissão."
         )
-        tax = st.number_input(
-            f"Taxas da emissão (R$) — {nome}",
-            min_value=0.0,
-            value=0.0,
-            step=10.0,
-            key=f"t{i}",
-            help="Taxas em dinheiro cobradas junto com a emissão em milhas."
+        taxa_auto, taxa_origem = taxa_resgate_referencia(
+            prefixo, orig, dest, ida0, adultos
         )
+        tax = st.number_input(
+            f"Taxa de resgate/emissão estimada (R$) — {nome}",
+            min_value=0.0,
+            value=float(taxa_auto),
+            step=1.0,
+            key=f"t{i}",
+            help=(
+                "Referência automática quando existe regra pública objetiva. "
+                "O campo continua editável porque taxa de embarque, companhia parceira, "
+                "categoria do cliente e o checkout podem alterar o valor final."
+            )
+        )
+        st.caption(taxa_origem)
 
         compra_default = 80.0 if prefixo == "SMILES" else 0.0
         compra_padrao = _secret_float(f"{prefixo}_BUY_PRICE_PER_1000", compra_default)
@@ -826,7 +915,7 @@ if regra_fixa:
     )
 
     disponibilidade_fixa = st.selectbox(
-        "Você confirmou disponibilidade de assento elegível pela tabela fixa?",
+        f"Você confirmou disponibilidade de assento elegível pela tabela fixa {regra_fixa['programa']}?",
         [
             "Ainda não verifiquei",
             "Verifiquei e NÃO há disponibilidade",
@@ -837,8 +926,56 @@ if regra_fixa:
     usar_fixa = disponibilidade_fixa == "Verifiquei e HÁ disponibilidade"
 
     st.caption(
-        "A tabela fixa LATAM Pass é para voos de companhias parceiras e não se aplica a voos operados pela própria LATAM. "
-        "A disponibilidade pode ser diferente da exibida no site da parceira e deve ser confirmada no canal de vendas LATAM Pass."
+        regra_fixa.get("observacao", "Confirme disponibilidade e regras diretamente com o programa.")
+    )
+    mensagem_verificacao = (
+        f"Quero verificar disponibilidade para resgate com tabela fixa {regra_fixa['programa']}.\\n"
+        f"Origem(ns): {', '.join(orig)}\\n"
+        f"Destino(s): {', '.join(dest)}\\n"
+        f"Data de ida: {data_br(ida0)}\\n"
+        f"Data de volta: {data_br(volta0)}\\n"
+        f"Cabine: {cab_pt}\\n"
+        f"Adultos: {int(adultos)}\\n"
+        "Gostaria de confirmar se há assento disponível pela tabela fixa e a quantidade final de milhas/pontos e taxas."
+    )
+
+    contato_url = regra_fixa.get("contato_base", "")
+    if "{mensagem}" in contato_url:
+        contato_url = contato_url.replace("{mensagem}", quote(mensagem_verificacao))
+
+    ccontato, cregras = st.columns(2)
+
+    with ccontato:
+        if contato_url:
+            st.link_button(
+                regra_fixa.get("contato_label", "🔎 Verificar disponibilidade"),
+                contato_url,
+                type="primary",
+                width="stretch"
+            )
+        else:
+            st.info(
+                f"Contato automático ainda não cadastrado para {regra_fixa['programa']}."
+            )
+
+    with cregras:
+        if regra_fixa.get("regras_url"):
+            st.link_button(
+                regra_fixa.get("regras_label", "📋 Abrir regras oficiais"),
+                regra_fixa["regras_url"],
+                width="stretch"
+            )
+        else:
+            st.info(
+                f"Página oficial de regras ainda não cadastrada para {regra_fixa['programa']}."
+            )
+
+    st.info(
+        regra_fixa.get(
+            "orientacao",
+            f"Confirme diretamente com {regra_fixa['programa']} a disponibilidade "
+            "antes de incluir a tabela fixa no ranking."
+        )
     )
 
     fixed_req_trecho = st.number_input(
@@ -850,12 +987,20 @@ if regra_fixa:
     )
     fixed_req = int(fixed_req_trecho * 2)
 
-    fixed_tax = st.number_input(
-        "Taxas estimadas da emissão por tabela fixa (R$)",
-        min_value=0.0,
-        value=0.0,
-        step=10.0
+    fixed_tax_auto, fixed_tax_msg = taxa_resgate_referencia(
+        "LATAM", orig, dest, ida0, adultos
     )
+    fixed_tax = st.number_input(
+        "Taxa de resgate/emissão estimada da tabela fixa (R$)",
+        min_value=0.0,
+        value=float(fixed_tax_auto),
+        step=1.0,
+        help=(
+            "Referência automática da taxa de resgate LATAM. "
+            "Taxas aeroportuárias e cobranças da companhia parceira podem ser adicionais."
+        )
+    )
+    st.caption(fixed_tax_msg)
     fixed_buy = st.number_input(
         f"Preço atual para comprar 1.000 milhas {regra_fixa['programa']} e completar saldo (R$)",
         min_value=0.0,
@@ -869,9 +1014,23 @@ if regra_fixa:
     a.metric("Exigência estimada ida e volta", f"{pts(fixed_req)} milhas")
     b.metric("Seu saldo LATAM", pts(lat))
     c.metric("Milhas faltantes", pts(fixed_missing))
+    milhas_para_comprar = fixed_missing if fixed_missing > 0 else fixed_req
+    max_milheiro = (
+        max(preco_ref - fixed_tax, 0) / milhas_para_comprar * 1000
+        if milhas_para_comprar else 0
+    )
     d.metric(
-        "Ponto de equilíbrio",
-        f"{brl((preco_ref-fixed_tax)/fixed_req*1000 if fixed_req else 0)} / 1.000"
+        "Preço máximo do milheiro para valer a pena",
+        f"{brl(max_milheiro)} / 1.000",
+        help=(
+            "Maior preço aproximado por 1.000 milhas necessárias para que a alternativa "
+            "não ultrapasse o preço da passagem em dinheiro."
+        )
+    )
+    st.caption(
+        f"Até aproximadamente {brl(max_milheiro)} por 1.000 milhas necessárias, "
+        "a tabela fixa pode continuar competitiva frente ao preço em dinheiro, "
+        "antes de outras cobranças eventualmente aplicáveis."
     )
 
     if not usar_fixa:
