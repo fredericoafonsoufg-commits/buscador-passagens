@@ -43,17 +43,17 @@ if "_sessao_ftt_inicializada" not in st.session_state:
     st.session_state["_sessao_ftt_inicializada"] = True
 
 
-st.markdown("""
+st.html("""
 <style>
 [data-testid="stToolbar"] {display:none !important;}
 [data-testid="stDecoration"] {display:none !important;}
 [data-testid="stStatusWidget"] {display:none !important;}
 #MainMenu {visibility:hidden !important;}
 </style>
-""", unsafe_allow_html=True)
+""")
 
 
-st.markdown("""
+st.html("""
 <style>
 /* Sidebar: abre expandida; se for recolhida, o botão de reabrir permanece visível. */
 [data-testid="stSidebar"] {
@@ -91,10 +91,10 @@ header[data-testid="stHeader"] {
     background: transparent !important;
 }
 </style>
-""", unsafe_allow_html=True)
+""")
 
 
-st.markdown("""
+st.html("""
 <style>
 /* Sidebar limpa e estável: usa a largura nativa do Streamlit. */
 [data-testid="stSidebar"] {
@@ -119,10 +119,10 @@ st.markdown("""
     max-width:1500px !important;
 }
 </style>
-""", unsafe_allow_html=True)
+""")
 
 
-st.markdown("""
+st.html("""
 <style>
 /* Frederico Travel Tools: menu lateral fixo no desktop. */
 [data-testid="stSidebarCollapseButton"] {
@@ -136,20 +136,20 @@ st.markdown("""
     display: none !important;
 }
 </style>
-""", unsafe_allow_html=True)
+""")
 
 
-st.markdown("""
+st.html("""
 <style>
 /* Oculta controles técnicos de cache/toolbar do Streamlit da interface do usuário. */
 [data-testid="stToolbar"] {display:none !important;}
 [data-testid="stStatusWidget"] {display:none !important;}
 #MainMenu {visibility:hidden !important;}
 </style>
-""", unsafe_allow_html=True)
+""")
 
 
-st.markdown("""
+st.html("""
 <style>
 [data-testid="stToolbar"],
 [data-testid="stStatusWidget"],
@@ -159,7 +159,7 @@ st.markdown("""
     visibility:hidden !important;
 }
 </style>
-""", unsafe_allow_html=True)
+""")
 
 SERPAPI_URL = "https://serpapi.com/search.json"
 BASE = Path.cwd()
@@ -778,7 +778,7 @@ def _ftt_b64(p):
     try: return base64.b64encode(Path(p).read_bytes()).decode()
     except Exception: return ""
 
-st.markdown("""
+st.html("""
 <style>
 :root{--navy:#08224a;--blue:#0b84f3;--bg:#f7f9fc;--line:#e5ebf3}
 .stApp{background:var(--bg)}
@@ -815,7 +815,7 @@ div[data-testid="stDownloadButton"]>button:hover{
 .fttHero img{display:block;width:min(560px,92%);height:auto;margin:auto;object-fit:contain}
 .fttFooter{margin-top:38px;padding:20px 4px 8px;border-top:1px solid var(--line);text-align:center;color:#718096;font-size:.88rem}
 </style>
-""",unsafe_allow_html=True)
+""")
 _logo=_ftt_b64(BASE/"assets"/"frederico_travel_tools_logo.png")
 def _pdf_safe(v):
     if v is None:
@@ -1162,47 +1162,63 @@ def gerar_relatorio_pdf(contexto):
 
 
 
-st.markdown("""
+st.html("""
 <style>
-/* Layout compacto: elimina espaços superiores desnecessários. */
-header[data-testid="stHeader"] {
+/* Remove completamente a faixa superior reservada pelo Streamlit. */
+html, body, [data-testid="stAppViewContainer"], .stApp {
+    margin-top:0 !important;
+    padding-top:0 !important;
+}
+header[data-testid="stHeader"],
+[data-testid="stHeader"],
+[data-testid="stDecoration"] {
     display:none !important;
     height:0 !important;
     min-height:0 !important;
+    max-height:0 !important;
 }
-[data-testid="stAppViewContainer"] {
+
+/* Conteúdo principal começa no topo real da página. */
+[data-testid="stMain"],
+main[data-testid="stMain"],
+section[data-testid="stMain"] {
+    margin-top:0 !important;
     padding-top:0 !important;
+    top:0 !important;
 }
-[data-testid="stAppViewContainer"] > .main {
-    padding-top:0 !important;
-}
-[data-testid="stAppViewContainer"] > .main > div {
-    padding-top:0 !important;
-}
+[data-testid="stMainBlockContainer"],
 .main .block-container,
-[data-testid="stMainBlockContainer"] {
-    padding-top:0.35rem !important;
+section.main > div.block-container {
+    padding-top:0.25rem !important;
     margin-top:0 !important;
 }
+
+/* Barra lateral também começa no topo real. */
+section[data-testid="stSidebar"],
 [data-testid="stSidebar"] {
     top:0 !important;
-    padding-top:0 !important;
-}
-[data-testid="stSidebar"] > div:first-child {
-    padding-top:0 !important;
-}
-[data-testid="stSidebar"] .block-container,
-[data-testid="stSidebarContent"] {
-    padding-top:0.35rem !important;
     margin-top:0 !important;
+    padding-top:0 !important;
+    height:100vh !important;
 }
-/* A marca deve ficar próxima do topo, sem faixa vazia acima. */
-[data-testid="stSidebar"] [data-testid="stImage"] {
+[data-testid="stSidebarContent"],
+[data-testid="stSidebar"] > div:first-child,
+[data-testid="stSidebar"] .block-container {
+    margin-top:0 !important;
+    padding-top:0.25rem !important;
+}
+
+/* Remove espaços automáticos antes do primeiro elemento. */
+[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
+    gap:0.45rem !important;
+}
+[data-testid="stMain"] > div:first-child,
+[data-testid="stSidebarContent"] > div:first-child {
     margin-top:0 !important;
     padding-top:0 !important;
 }
 </style>
-""", unsafe_allow_html=True)
+""")
 
 if "_pesquisa_versao" not in st.session_state:
     st.session_state["_pesquisa_versao"] = 0
