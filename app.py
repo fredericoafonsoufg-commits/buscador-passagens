@@ -1,4 +1,4 @@
-
+ 
 import os, json, hashlib, statistics, hmac
 from urllib.parse import quote
 from datetime import date, timedelta, datetime
@@ -1735,14 +1735,40 @@ if rank:
             st.session_state["ida_escolhida"] = top[idx_ida]
 
         # As opções de volta ficam visíveis sem exigir clique na ida.
-        # Para evitar dezenas de consultas repetidas, usamos automaticamente
-        # a ida de menor preço como referência inicial. Se o usuário selecionar
-        # outra ida, a tabela de volta é recalculada para aquela opção.
-        sel_retorno = (
-            st.session_state.get("ida_escolhida")
-            if st.session_state.get("ida_escolhida") in top
-            else top[0]
-        )
+        # Por padrão, priorizamos exatamente as datas principais escolhidas
+        # pelo usuário, mesmo quando há flexibilidade de ± dias.
+        if st.session_state.get("ida_escolhida") in top:
+            sel_retorno = st.session_state.get("ida_escolhida")
+        else:
+            data_ida_principal = data_br(ida0)
+            data_volta_principal = data_br(volta0)
+
+            candidatos_exatos = [
+                x for x in rank
+                if x.get("Ida") == data_ida_principal
+                and x.get("Volta") == data_volta_principal
+            ]
+
+            # Se por algum motivo não houver a combinação exata da ida,
+            # ainda prioriza a data de volta escolhida.
+            if candidatos_exatos:
+                sel_retorno = sorted(
+                    candidatos_exatos,
+                    key=lambda x: (x["Preço (R$)"], x["Escalas"])
+                )[0]
+            else:
+                candidatos_volta = [
+                    x for x in rank
+                    if x.get("Volta") == data_volta_principal
+                ]
+                sel_retorno = (
+                    sorted(
+                        candidatos_volta,
+                        key=lambda x: (x["Preço (R$)"], x["Escalas"])
+                    )[0]
+                    if candidatos_volta
+                    else top[0]
+                )
 
         retorno_key = (
             f"{sel_retorno.get('_token','')}|{sel_retorno.get('Ida','')}|"
@@ -1794,7 +1820,8 @@ if rank:
         st.markdown("#### Opções de volta")
         if "retornos" in st.session_state and not st.session_state["retornos"].empty:
             st.caption(
-                "As opções abaixo já estão disponíveis. Clique em uma linha apenas se quiser marcar a volta preferida."
+                f"Opções para a data de volta escolhida: {data_br(volta0)}. "
+                "Clique em uma linha apenas se quiser marcar a volta preferida."
             )
             evento_volta = st.dataframe(
                 st.session_state["retornos"],
