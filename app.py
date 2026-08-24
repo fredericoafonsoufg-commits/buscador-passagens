@@ -32,6 +32,16 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Limpa resultados antigos ao iniciar uma nova sessão do aplicativo.
+if "_sessao_ftt_inicializada" not in st.session_state:
+    for _k in [
+        "rank", "uso", "retornos", "preco_ref", "ultima_pesquisa",
+        "price_insights_raw", "_ultimo_ponto_salvo", "retorno_sel_key"
+    ]:
+        st.session_state.pop(_k, None)
+    st.session_state["_sessao_ftt_inicializada"] = True
+
+
 st.markdown("""
 <style>
 [data-testid="stToolbar"] {display:none !important;}
@@ -134,6 +144,19 @@ st.markdown("""
 [data-testid="stToolbar"] {display:none !important;}
 [data-testid="stStatusWidget"] {display:none !important;}
 #MainMenu {visibility:hidden !important;}
+</style>
+""", unsafe_allow_html=True)
+
+
+st.markdown("""
+<style>
+[data-testid="stToolbar"],
+[data-testid="stStatusWidget"],
+[data-testid="stMainMenu"],
+#MainMenu {
+    display:none !important;
+    visibility:hidden !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -1103,7 +1126,7 @@ st.markdown("""
   <a href="#historico">Histórico</a>
   <a href="#relatorios">Relatórios</a>
   <div class="grow"></div>
-  <div class="version">V15.2 Web</div>
+  <div class="version">V15.3 Web</div>
   <div class="avatar">FA</div>
 </div>
 """, unsafe_allow_html=True)
@@ -1195,6 +1218,14 @@ with st.sidebar:
 orig = codigos(orig_txt)
 dest = codigos(dest_txt)
 
+campos_prontos = bool(
+    orig and dest and tipo_viagem and ida0 and adultos
+    and cab_pt and stop_pt
+)
+if not campos_prontos:
+    for _k in ["rank", "uso", "retornos", "preco_ref", "ultima_pesquisa", "price_insights_raw"]:
+        st.session_state.pop(_k, None)
+
 comb = []
 if ida0 and fi is not None and adultos and cab is not None and stops is not None:
     if tipo_viagem == "Ida e volta":
@@ -1283,10 +1314,7 @@ if st.button(
 rank = st.session_state.get("rank", [])
 if rank:
     novas, reap = st.session_state.get("uso", (0,0))
-    st.success(
-        f"Foram encontradas **{len(rank)} opções**. "
-        f"Resultados atualizados: **{novas}** · resultados recentes reaproveitados: **{reap}**."
-    )
+    st.success(f"Foram encontradas **{len(rank)} opções**.")
 
     menor = rank[0]["Preço (R$)"]
     st.session_state["preco_ref"] = menor
@@ -1299,6 +1327,9 @@ if rank:
     st.metric("Menor preço encontrado", brl(menor))
 
     top = rank[:20]
+    if volta0:
+        st.markdown("#### Opções de ida")
+        st.caption("O preço mostrado é o total da viagem. Escolha uma ida abaixo para ver os horários disponíveis de volta.")
     st.dataframe(
         pd.DataFrame([{k:v for k,v in x.items() if not k.startswith("_")} for x in top]),
         width="stretch",
@@ -1309,158 +1340,183 @@ if rank:
     )
 
     if volta0:
-        st.subheader("Mais opções de ida e volta")
+        st.subheader("Escolha a ida e veja a volta")
 
         labels = [
-            f"{i+1}. {brl(x['Preço (R$)'])} | {x['Ida']} → {x['Volta']} | "
-            f"{x['Origem']}→{x['Destino']} | {x['Companhia(s)']} | {x['Saída ida']}"
-            for i,x in enumerate(top)
+            f"{i+1}. {brl(x['Preço (R$)'])} | {x['Ida']} | "
+            f"{x['Origem']} → {x['Destino']} | {x['Saída ida']} | "
+            f"{x['Companhia(s)']} | {x['Duração ida']}"
+            for i, x in enumerate(top)
         ]
 
-        choice = st.selectbox("Escolha uma das opções de ida", labels)
+        choice = st.selectbox(
+            "Voo de ida",
+            labels,
+            key="voo_ida_selecionado"
+        )
         sel = top[labels.index(choice)]
 
-        if st.button("Buscar mais opções de volta para esta ida"):
-            p = dict(sel["_params"])
-            p["departure_token"] = sel["_token"]
+        st.markdown("#### Ida selecionada")
+        st.caption(
+            f"{sel['Ida']} · {sel['Origem']} → {sel['Destino']} · "
+            f"saída {sel['Saída ida']} · chegada {sel['Chegada ida']} · "
+            f"{sel['Companhia(s)']} · {sel['Duração ida']}"
+        )
+
+        # Busca automaticamente as opções de retorno da ida selecionada.
+        retorno_key = f"{sel.get('_token','')}|{sel.get('Ida','')}|{sel.get('Volta','')}"
+        if st.session_state.get("retorno_sel_key") != retorno_key:
+            p_retorno = dict(sel["_params"])
+            p_retorno["departure_token"] = sel["_token"]
 
             try:
-                d, cached = consulta(p)
+                d_retorno, _ = consulta(p_retorno)
                 rr = []
 
-                for item in all_items(d):
+                for item in all_items(d_retorno):
                     s = summarize(item)
                     if s:
                         rr.append({
                             "Preço total (R$)": s["preco"],
-                            "Origem": s["origem"],
-                            "Destino": s["destino"],
-                            "Companhia(s)": s["cias"],
-                            "Saída": data_br(s["saida"]),
-                            "Chegada": data_br(s["chegada"]),
-                            "Escalas": s["escalas"],
-                            "Duração": s["duracao"],
-                            "Voos": s["voos"]
+                            "Data volta": sel["Volta"],
+                            "Origem volta": s["origem"],
+                            "Destino volta": s["destino"],
+                            "Companhia(s) volta": s["cias"],
+                            "Saída volta": data_br(s["saida"]),
+                            "Chegada volta": data_br(s["chegada"]),
+                            "Escalas volta": s["escalas"],
+                            "Duração volta": s["duracao"],
+                            "Voos volta": s["voos"]
                         })
 
                 if rr:
-                    rdf = pd.DataFrame(rr)
-                    rdf["Preço total (R$)"] = pd.to_numeric(
-                        rdf["Preço total (R$)"],
+                    rdf_retorno = pd.DataFrame(rr)
+                    rdf_retorno["Preço total (R$)"] = pd.to_numeric(
+                        rdf_retorno["Preço total (R$)"],
                         errors="coerce"
                     )
-                    st.session_state["retornos"] = rdf.sort_values(
+                    st.session_state["retornos"] = rdf_retorno.sort_values(
                         "Preço total (R$)",
                         na_position="last"
                     )
+                else:
+                    st.session_state.pop("retornos", None)
 
+                st.session_state["retorno_sel_key"] = retorno_key
             except Exception as e:
-                st.error(str(e))
+                st.warning(f"Não foi possível carregar as opções de volta: {e}")
+
+        if "retornos" in st.session_state:
+            st.markdown("#### Opções de volta")
+            st.dataframe(
+                st.session_state["retornos"],
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "Preço total (R$)": st.column_config.NumberColumn(format="R$ %.2f")
+                }
+            )
     else:
         st.caption("Pesquisa somente de ida: não há etapa de seleção de retorno.")
 
-if volta0 and "retornos" in st.session_state:
-    st.dataframe(
-        st.session_state["retornos"],
-        width="stretch",
-        hide_index=True,
-        column_config={
-            "Preço total (R$)": st.column_config.NumberColumn(format="R$ %.2f")
-        }
+
+
+if st.session_state.get("rank"):
+    st.divider()
+    st.markdown('<div id="historico"></div>', unsafe_allow_html=True)
+    st.subheader("2. Histórico de preços")
+
+    periodo_hist = st.radio(
+        "Comparar o preço atual com:",
+        ["Últimos 30 dias", "Últimos 60 dias"],
+        horizontal=True,
+        key="periodo_historico"
+    )
+    dias_hist = 30 if periodo_hist == "Últimos 30 dias" else 60
+    st.caption("O gráfico é atualizado automaticamente ao trocar entre 30 e 60 dias, usando a última pesquisa realizada.")
+
+    # O Streamlit atualiza esta seção automaticamente ao clicar em 30 ou 60 dias.
+    # Não é necessário executar uma nova varredura.
+    ultima = st.session_state.get("ultima_pesquisa", {})
+    hist_orig = ultima.get("orig", orig)
+    hist_dest = ultima.get("dest", dest)
+    hist_ida = ultima.get("ida", ida0)
+    hist_volta = ultima.get("volta", volta0)
+    hist_adultos = ultima.get("adultos", int(adultos) if adultos else 1)
+    hist_cabine = ultima.get("cabine", cab_pt)
+    hist_conexoes = ultima.get("conexoes", stop_pt)
+
+    preco_atual_hist = float(st.session_state.get("preco_ref", 0) or 0)
+    insights_raw = st.session_state.get("price_insights_raw", {}) or {}
+
+    hist_google = pd.DataFrame()
+    if insights_raw:
+        hist_fake_container = {"price_insights": insights_raw}
+        hist_google, _ = extrair_historico_preco(hist_fake_container, dias_hist)
+
+    hist_local = historico_proprio(
+        hist_orig, hist_dest, hist_ida, hist_volta,
+        hist_adultos, hist_cabine, hist_conexoes, dias_hist
     )
 
+    if preco_atual_hist > 0 and not hist_google.empty:
+        analise = classificar_preco_atual(preco_atual_hist, hist_google, insights_raw)
+        st.caption("Histórico de preços atualizado.")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Preço atual", brl(preco_atual_hist))
+        nivel_curto = analise["nivel"].replace("🟢 ", "").replace("🟡 ", "").replace("🔴 ", "")
+        c2.metric("Avaliação", nivel_curto)
+        c3.metric("Média do período", brl(analise["media"]))
+        sentido_media = "acima" if analise["diferenca_pct"] >= 0 else "abaixo"
+        c4.metric("Vs. média", f"{abs(analise['diferenca_pct']):.1f}% {sentido_media}")
+        st.caption(f"Avaliação do preço: {analise['nivel']}")
 
-st.divider()
-st.markdown('<div id="historico"></div>', unsafe_allow_html=True)
-st.subheader("2. Histórico de preços")
+        graf = hist_google.copy()
+        graf["Data"] = pd.to_datetime(graf["Data"])
+        graf = graf.set_index("Data")
+        graf["Preço atual"] = preco_atual_hist
+        grafico_historico_google_style(graf.reset_index(), preco_atual_hist)
+        st.caption(
+            f"Faixa de preços no período: menor {brl(analise['minimo'])} · "
+            f"maior {brl(analise['maximo'])}"
+        )
 
-periodo_hist = st.radio(
-    "Comparar o preço atual com:",
-    ["Últimos 30 dias", "Últimos 60 dias"],
-    horizontal=True,
-    key="periodo_historico"
-)
-dias_hist = 30 if periodo_hist == "Últimos 30 dias" else 60
-st.caption("O gráfico é atualizado automaticamente ao trocar entre 30 e 60 dias, usando a última pesquisa realizada.")
+    elif preco_atual_hist > 0 and not hist_local.empty:
+        st.caption("Histórico de preços atualizado.")
+        h = hist_local.copy()
+        h["capturado_em"] = pd.to_datetime(h["capturado_em"])
+        h = h.rename(columns={"capturado_em":"Data", "preco":"Preço (R$)"}).set_index("Data")
+        media = float(h["Preço (R$)"].mean())
+        minimo = float(h["Preço (R$)"].min())
+        maximo = float(h["Preço (R$)"].max())
+        diferenca = ((preco_atual_hist-media)/media*100) if media else 0
 
-# O Streamlit atualiza esta seção automaticamente ao clicar em 30 ou 60 dias.
-# Não é necessário executar uma nova varredura.
-ultima = st.session_state.get("ultima_pesquisa", {})
-hist_orig = ultima.get("orig", orig)
-hist_dest = ultima.get("dest", dest)
-hist_ida = ultima.get("ida", ida0)
-hist_volta = ultima.get("volta", volta0)
-hist_adultos = ultima.get("adultos", int(adultos))
-hist_cabine = ultima.get("cabine", cab_pt)
-hist_conexoes = ultima.get("conexoes", stop_pt)
+        c1,c2,c3,c4 = st.columns(4)
+        c1.metric("Preço atual", brl(preco_atual_hist))
+        if diferenca < -10:
+            avaliacao_local = "🟢 Bom preço"
+        elif diferenca <= 10:
+            avaliacao_local = "🟡 Preço normal"
+        else:
+            avaliacao_local = "🔴 Preço alto"
+        avaliacao_curta = avaliacao_local.replace("🟢 ", "").replace("🟡 ", "").replace("🔴 ", "")
+        c2.metric("Avaliação", avaliacao_curta)
+        c3.metric("Média do período", brl(media))
+        sentido_local = "acima" if diferenca >= 0 else "abaixo"
+        c4.metric("Vs. média", f"{abs(diferenca):.1f}% {sentido_local}")
+        st.caption(f"Avaliação do preço: {avaliacao_local}")
 
-preco_atual_hist = float(st.session_state.get("preco_ref", 0) or 0)
-insights_raw = st.session_state.get("price_insights_raw", {}) or {}
+        h["Preço atual"] = preco_atual_hist
+        grafico_historico_google_style(h.reset_index(), preco_atual_hist)
+        st.caption(
+            f"Faixa de preços no período: menor {brl(minimo)} · maior {brl(maximo)}"
+        )
 
-hist_google = pd.DataFrame()
-if insights_raw:
-    hist_fake_container = {"price_insights": insights_raw}
-    hist_google, _ = extrair_historico_preco(hist_fake_container, dias_hist)
-
-hist_local = historico_proprio(
-    hist_orig, hist_dest, hist_ida, hist_volta,
-    hist_adultos, hist_cabine, hist_conexoes, dias_hist
-)
-
-if preco_atual_hist > 0 and not hist_google.empty:
-    analise = classificar_preco_atual(preco_atual_hist, hist_google, insights_raw)
-    st.caption("Histórico de preços atualizado.")
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Preço atual", brl(preco_atual_hist))
-    c2.metric("Avaliação do preço", analise["nivel"])
-    c3.metric("Média do período", brl(analise["media"]))
-    sentido_media = "acima" if analise["diferenca_pct"] >= 0 else "abaixo"
-    c4.metric("Comparação com a média", f"{abs(analise['diferenca_pct']):.1f}% {sentido_media}")
-
-    graf = hist_google.copy()
-    graf["Data"] = pd.to_datetime(graf["Data"])
-    graf = graf.set_index("Data")
-    graf["Preço atual"] = preco_atual_hist
-    grafico_historico_google_style(graf.reset_index(), preco_atual_hist)
-    st.caption(
-        f"Faixa de preços no período: menor {brl(analise['minimo'])} · "
-        f"maior {brl(analise['maximo'])}"
-    )
-
-elif preco_atual_hist > 0 and not hist_local.empty:
-    st.caption("Histórico de preços atualizado.")
-    h = hist_local.copy()
-    h["capturado_em"] = pd.to_datetime(h["capturado_em"])
-    h = h.rename(columns={"capturado_em":"Data", "preco":"Preço (R$)"}).set_index("Data")
-    media = float(h["Preço (R$)"].mean())
-    minimo = float(h["Preço (R$)"].min())
-    maximo = float(h["Preço (R$)"].max())
-    diferenca = ((preco_atual_hist-media)/media*100) if media else 0
-
-    c1,c2,c3,c4 = st.columns(4)
-    c1.metric("Preço atual", brl(preco_atual_hist))
-    if diferenca < -10:
-        avaliacao_local = "🟢 Bom preço"
-    elif diferenca <= 10:
-        avaliacao_local = "🟡 Preço normal"
     else:
-        avaliacao_local = "🔴 Preço alto"
-    c2.metric("Avaliação do preço", avaliacao_local)
-    c3.metric("Média do período", brl(media))
-    sentido_local = "acima" if diferenca >= 0 else "abaixo"
-    c4.metric("Comparação com a média", f"{abs(diferenca):.1f}% {sentido_local}")
-
-    h["Preço atual"] = preco_atual_hist
-    grafico_historico_google_style(h.reset_index(), preco_atual_hist)
-    st.caption(
-        f"Faixa de preços no período: menor {brl(minimo)} · maior {brl(maximo)}"
-    )
-
-else:
-    st.info(
-        "Ainda não há histórico suficiente para esta pesquisa. "
-        "A partir de agora, cada pesquisa concluída salva o menor preço encontrado para formar seu histórico."
-    )
+        st.info(
+            "Ainda não há histórico suficiente para esta pesquisa. "
+            "A partir de agora, cada pesquisa concluída salva o menor preço encontrado para formar seu histórico."
+        )
 
 
 st.divider()
