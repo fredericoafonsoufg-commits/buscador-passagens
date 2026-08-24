@@ -1,6 +1,6 @@
  
 import os, json, hashlib, statistics, hmac
-from urllib.parse import quote, urlencode
+from urllib.parse import quote
 from datetime import date, timedelta, datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -581,29 +581,6 @@ def classificar_preco_atual(preco_atual, historico_df, insights):
         "maximo": None,
         "diferenca_pct": None
     }
-
-
-def seats_aero_search_url(origens, destinos, data_voo, flex_dias=0):
-    """
-    Monta um link para a busca pública/gratuita do Seats.aero.
-    Não usa API nem faz scraping; apenas abre a pesquisa no próprio site.
-    """
-    if not origens or not destinos or not data_voo:
-        return "https://seats.aero/search"
-
-    params = {
-        "min_seats": 1,
-        "applicable_cabin": "any",
-        "additional_days": "true" if int(flex_dias or 0) > 0 else "false",
-        "additional_days_num": int(flex_dias or 0),
-        "max_fees": 40000,
-        "disable_live_filtering": "false",
-        "date": data_voo.isoformat(),
-        "origins": ",".join(origens),
-        "destinations": ",".join(destinos),
-        "view": "default",
-    }
-    return "https://seats.aero/search?" + urlencode(params)
 
 
 def exigir_senha():
@@ -1464,7 +1441,7 @@ def gerar_relatorio_pdf(contexto):
         story.append(Spacer(1, 4*mm))
         story.append(Paragraph(titulo_secao("Saldos e comparação com milhas"), h2))
         story.append(Paragraph(
-            "Dados de resgate informados pelo usuário após consulta ao programa ou ao Seats.aero. "
+            "Dados de resgate informados pelo usuário após consulta ao programa ou a uma ferramenta externa. "
             "Disponibilidade e taxas devem ser confirmadas antes da emissão.",
             small
         ))
@@ -2319,37 +2296,29 @@ if rank:
 if tem_milhas == "Sim":
     st.markdown("#### Consultar disponibilidade com pontos")
     st.caption(
-        "Use a pesquisa gratuita do Seats.aero para procurar disponibilidade. "
-        "Depois volte para esta tela e informe abaixo os pontos e as taxas que encontrou."
+        "Consulte a disponibilidade de emissões com pontos no Seats.aero e depois informe aqui "
+        "somente os pontos e as taxas encontrados."
     )
 
-    seats_ida_url = seats_aero_search_url(orig, dest, ida0, fi or 0)
+    st.link_button(
+        "Consultar no Seats.aero",
+        "https://seats.aero/search",
+        width="stretch"
+    )
 
     if volta0:
-        seats_volta_url = seats_aero_search_url(dest, orig, volta0, fv or 0)
-        c_seats_1, c_seats_2 = st.columns(2)
-        with c_seats_1:
-            st.link_button(
-                "🔎 Consultar ida no Seats.aero",
-                seats_ida_url,
-                width="stretch"
-            )
-        with c_seats_2:
-            st.link_button(
-                "🔎 Consultar volta no Seats.aero",
-                seats_volta_url,
-                width="stretch"
-            )
+        st.info(
+            f"Pesquise: {', '.join(orig)} → {', '.join(dest)} em {data_br(ida0)} "
+            f"e {', '.join(dest)} → {', '.join(orig)} em {data_br(volta0)}."
+        )
     else:
-        st.link_button(
-            "🔎 Consultar no Seats.aero",
-            seats_ida_url,
-            width="stretch"
+        st.info(
+            f"Pesquise: {', '.join(orig)} → {', '.join(dest)} em {data_br(ida0)}."
         )
 
     st.caption(
-        "A busca é aberta diretamente no Seats.aero com rota, data e flexibilidade já preenchidas. "
-        "Os resultados gratuitos podem ser dados armazenados e devem ser confirmados no programa antes da emissão."
+        "Se o Seats.aero não mostrar disponibilidade gratuita para sua rota ou data, "
+        "continue normalmente e informe os dados encontrados diretamente no programa de milhas."
     )
 
     programas_escolhidos = st.multiselect(
@@ -2469,7 +2438,7 @@ if rank and tem_milhas == "Sim" and programas_escolhidos and preco_ref > 0:
     st.subheader("4. Comparar dinheiro × milhas")
     st.caption(
         f"Preço em dinheiro usado como referência: {brl(preco_ref)}. "
-        "Preencha os pontos e as taxas que você encontrou no Seats.aero ou diretamente no programa."
+        "Informe apenas os pontos exigidos e as taxas do resgate."
     )
 
     mapa_programas = {
@@ -2483,8 +2452,8 @@ if rank and tem_milhas == "Sim" and programas_escolhidos and preco_ref > 0:
 
         with st.expander(f"Simular com {nome}", expanded=False):
             st.caption(
-                "Informe os dados que você encontrou. Se o Seats.aero mostrar apenas pontos, "
-                "confirme as taxas no programa antes de emitir."
+                "Informe os dados do resgate. Se o Seats.aero não mostrar as taxas, "
+                "confirme o valor diretamente no programa antes da emissão."
             )
             req = st.number_input(
                 "Quantas milhas/pontos o programa está cobrando?",
@@ -2867,7 +2836,7 @@ if rank:
     ">
       <div style="font-size:1.05rem;font-weight:800;color:#08224a;">Relatório completo em PDF</div>
       <div style="color:#718096;margin-top:4px;">
-        Baixe um relatório completo com voos, gráficos, tabelas, comparação de milhas e recomendação final.
+        Baixe um relatório com voos, histórico de preços, comparação de milhas informadas e recomendação final.
       </div>
     </div>
     """, unsafe_allow_html=True)
