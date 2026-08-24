@@ -2,6 +2,7 @@
 import os, json, hashlib, statistics, hmac
 from urllib.parse import quote
 from datetime import date, timedelta, datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 import pandas as pd
@@ -754,10 +755,10 @@ def campo_aeroporto_inteligente(titulo, key_prefix):
         key=lambda a: (prioridade.get(a["codigo"], 9999), a["cidade"], a["codigo"])
     )
 
-    escolhidos = st.multiselect(
+    escolhido = st.selectbox(
         titulo,
         options=opcoes,
-        default=[],
+        index=None,
         format_func=rotulo_aeroporto,
         key=f"{key_prefix}_aeroportos",
         placeholder="Digite a cidade ou aeroporto",
@@ -767,11 +768,10 @@ def campo_aeroporto_inteligente(titulo, key_prefix):
         )
     )
 
-    if not escolhidos:
+    if not escolhido:
         return ""
 
-    codigos = [a["codigo"] for a in escolhidos]
-    return ",".join(codigos)
+    return escolhido["codigo"]
 
 
 def _ftt_b64(p):
@@ -904,8 +904,9 @@ def gerar_relatorio_pdf(contexto):
         story.append(Spacer(1, 2*mm))
 
     story.append(Paragraph("Relatório completo da pesquisa de passagens", h1))
+    horario_brasilia = datetime.now(ZoneInfo("America/Sao_Paulo"))
     story.append(Paragraph(
-        f"Gerado em {datetime.now().strftime('%d/%m/%Y às %H:%M')} · Desenvolvido por Frederico Afonso Farias",
+        f"Gerado em {horario_brasilia.strftime('%d/%m/%Y às %H:%M')} - horário de Brasília",
         small
     ))
     story.append(Spacer(1, 4*mm))
