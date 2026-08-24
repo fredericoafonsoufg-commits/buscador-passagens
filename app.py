@@ -744,6 +744,11 @@ def agrupar_resultados_aeroportos(resultados):
 
 
 def campo_aeroporto_inteligente(titulo, key_prefix):
+    """
+    Permite vários aeroportos sem manter o menu aberto.
+    O primeiro aeroporto é escolhido normalmente. Depois disso, a lista
+    só volta a aparecer quando o usuário clicar em "Adicionar outro aeroporto".
+    """
     prioridade = {
         "GRU": 1, "CGH": 2, "VCP": 3,
         "GIG": 4, "SDU": 5,
@@ -755,23 +760,90 @@ def campo_aeroporto_inteligente(titulo, key_prefix):
         key=lambda a: (prioridade.get(a["codigo"], 9999), a["cidade"], a["codigo"])
     )
 
-    escolhido = st.selectbox(
-        titulo,
-        options=opcoes,
-        index=None,
-        format_func=rotulo_aeroporto,
-        key=f"{key_prefix}_aeroportos",
-        placeholder="Digite a cidade ou aeroporto",
-        help=(
-            "Digite o nome da cidade ou, se souber, a sigla do aeroporto. "
-            "Ex.: Rio de Janeiro, GIG, São Paulo, CGH, Lima, LIM."
-        )
-    )
+    lista_key = f"{key_prefix}_selecionados"
+    input_key = f"{key_prefix}_novo_aeroporto"
 
-    if not escolhido:
+    if lista_key not in st.session_state:
+        st.session_state[lista_key] = []
+
+    selecionados = st.session_state[lista_key]
+
+    def _adicionar_aeroporto():
+        escolhido = st.session_state.get(input_key)
+        if escolhido:
+            cod = escolhido.get("codigo")
+            if cod and all(a.get("codigo") != cod for a in st.session_state[lista_key]):
+                st.session_state[lista_key].append(escolhido)
+        st.session_state[input_key] = None
+
+    def _remover_aeroporto(codigo):
+        st.session_state[lista_key] = [
+            a for a in st.session_state[lista_key]
+            if a.get("codigo") != codigo
+        ]
+
+    st.markdown(f"**{titulo}**")
+
+    # Primeira escolha: campo pesquisável direto.
+    if not selecionados:
+        st.selectbox(
+            f"Selecionar {titulo.lower()}",
+            options=opcoes,
+            index=None,
+            format_func=rotulo_aeroporto,
+            key=input_key,
+            placeholder="Digite a cidade ou aeroporto",
+            label_visibility="collapsed",
+            on_change=_adicionar_aeroporto,
+            help=(
+                "Digite o nome da cidade ou, se souber, a sigla do aeroporto. "
+                "Ex.: Rio de Janeiro, GIG, São Paulo, CGH, Lima, LIM."
+            )
+        )
+    else:
+        # Mostra os aeroportos escolhidos sem manter o menu de pesquisa aberto.
+        for a in selecionados:
+            cidade = a.get("cidade") or ""
+            codigo = a.get("codigo") or ""
+            c1, c2 = st.columns([0.82, 0.18], gap="small")
+            with c1:
+                st.markdown(
+                    f"<div style='padding:8px 10px;border:1px solid #dfe7f0;"
+                    f"border-radius:10px;background:#fff;'>{cidade} — <b>{codigo}</b></div>",
+                    unsafe_allow_html=True
+                )
+            with c2:
+                st.button(
+                    "✕",
+                    key=f"{key_prefix}_remover_{codigo}",
+                    help=f"Remover {codigo}",
+                    on_click=_remover_aeroporto,
+                    args=(codigo,),
+                    width="stretch"
+                )
+
+        # A lista reaparece somente quando o usuário quiser acrescentar outro.
+        with st.popover("＋ Adicionar outro aeroporto", width="stretch"):
+            st.selectbox(
+                "Novo aeroporto",
+                options=[
+                    a for a in opcoes
+                    if all(s.get("codigo") != a.get("codigo") for s in selecionados)
+                ],
+                index=None,
+                format_func=rotulo_aeroporto,
+                key=input_key,
+                placeholder="Digite a cidade ou aeroporto",
+                on_change=_adicionar_aeroporto,
+                help=(
+                    "Escolha outro aeroporto para incluir na mesma origem ou destino."
+                )
+            )
+
+    if not st.session_state[lista_key]:
         return ""
 
-    return escolhido["codigo"]
+    return ",".join(a["codigo"] for a in st.session_state[lista_key])
 
 
 def _ftt_b64(p):
