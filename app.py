@@ -583,6 +583,29 @@ def classificar_preco_atual(preco_atual, historico_df, insights):
     }
 
 
+def seats_aero_search_url(origens, destinos, data_voo, flex_dias=0):
+    """
+    Monta um link para a busca pública/gratuita do Seats.aero.
+    Não usa API nem faz scraping; apenas abre a pesquisa no próprio site.
+    """
+    if not origens or not destinos or not data_voo:
+        return "https://seats.aero/search"
+
+    params = {
+        "min_seats": 1,
+        "applicable_cabin": "any",
+        "additional_days": "true" if int(flex_dias or 0) > 0 else "false",
+        "additional_days_num": int(flex_dias or 0),
+        "max_fees": 40000,
+        "disable_live_filtering": "false",
+        "date": data_voo.isoformat(),
+        "origins": ",".join(origens),
+        "destinations": ",".join(destinos),
+        "view": "default",
+    }
+    return "https://seats.aero/search?" + urlencode(params)
+
+
 def exigir_senha():
     senha_configurada = _secret_or_env("APP_PASSWORD")
     if not senha_configurada:
@@ -2440,27 +2463,6 @@ def _secret_float(nome, padrao):
         return float(padrao)
 
 
-def seats_aero_search_url(origens, destinos, data_voo, flex_dias=0):
-    """
-    Monta um link para a busca pública/gratuita do Seats.aero.
-    Não usa API nem faz scraping; apenas abre a pesquisa no próprio site.
-    """
-    if not origens or not destinos or not data_voo:
-        return "https://seats.aero/search"
-
-    params = {
-        "min_seats": 1,
-        "applicable_cabin": "any",
-        "additional_days": "true" if int(flex_dias or 0) > 0 else "false",
-        "additional_days_num": int(flex_dias or 0),
-        "max_fees": 40000,
-        "disable_live_filtering": "false",
-        "date": data_voo.isoformat(),
-        "origins": ",".join(origens),
-        "destinations": ",".join(destinos),
-        "view": "default",
-    }
-    return "https://seats.aero/search?" + urlencode(params)
 
 # Dados internos usados pelo ranking. A interface só pede o necessário.
 if rank and tem_milhas == "Sim" and programas_escolhidos and preco_ref > 0:
