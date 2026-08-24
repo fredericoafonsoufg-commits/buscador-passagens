@@ -1,9 +1,10 @@
- 
+
 import os, json, hashlib, statistics, hmac
 from urllib.parse import quote
 from datetime import date, timedelta, datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
 import altair as alt
@@ -1616,16 +1617,38 @@ if st.button(
     rows = []
     novas = reap = 0
     prog = st.progress(0)
+    erros_reais = []
 
-    for idx, (ida, volta) in enumerate(comb, 1):
+    def _buscar_combinacao(par):
+        ida, volta = par
+        p = params_base(orig, dest, ida, volta, int(adultos), cab, stops)
         try:
-            p = params_base(orig, dest, ida, volta, int(adultos), cab, stops)
             d, cached = consulta(p)
+            return ida, volta, p, d, cached, None
+        except Exception as exc:
+            return ida, volta, p, None, False, exc
+
+    max_workers = min(6, max(1, len(comb)))
+    concluidas = 0
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futuros = [executor.submit(_buscar_combinacao, par) for par in comb]
+
+        for futuro in as_completed(futuros):
+            ida, volta, p, d, cached, erro = futuro.result()
+            concluidas += 1
+            prog.progress(concluidas / len(comb))
+
+            if erro is not None:
+                msg = str(erro)
+                # Ausência de voos em uma combinação de datas não é erro para o usuário.
+                if "hasn't returned any results" not in msg.lower() and "no results" not in msg.lower():
+                    erros_reais.append(msg)
+                continue
+
             reap += int(cached)
             novas += int(not cached)
 
-            # Guarda o histórico de preços retornado pela pesquisa para que o gráfico
-            # de 30/60 dias possa ser atualizado apenas clicando no período.
             if isinstance(d, dict) and d.get("price_insights"):
                 st.session_state["price_insights_raw"] = d.get("price_insights") or {}
 
@@ -1647,10 +1670,14 @@ if st.button(
                         "_token": s["token"],
                         "_params": p
                     })
-        except Exception as e:
-            st.warning(str(e))
 
-        prog.progress(idx / len(comb))
+    prog.empty()
+
+    if not rows:
+        if erros_reais:
+            st.error("Não foi possível concluir a pesquisa. Tente novamente em alguns instantes.")
+        else:
+            st.info("Não foram encontrados voos para os filtros e datas informados.")
 
     rows = sorted(rows, key=lambda x:(x["Preço (R$)"], x["Escalas"]))
     st.session_state["rank"] = rows
@@ -1688,7 +1715,7 @@ if rank:
 
     if volta0:
         st.markdown("#### Opções de ida")
-        st.caption("Clique em uma linha para escolher o voo de ida.")
+        st.caption("Clique em uma linha apenas se quiser marcar sua opção preferida.")
 
         evento_ida = st.dataframe(
             df_ida,
@@ -1703,84 +1730,92 @@ if rank:
         )
 
         linhas_ida = list(evento_ida.selection.rows) if evento_ida else []
-
         if linhas_ida:
             idx_ida = int(linhas_ida[0])
-            sel = top[idx_ida]
+            st.session_state["ida_escolhida"] = top[idx_ida]
 
-            retorno_key = (
-                f"{sel.get('_token','')}|{sel.get('Ida','')}|"
-                f"{sel.get('Volta','')}|{idx_ida}"
+        # As opções de volta ficam visíveis sem exigir clique na ida.
+        # Para evitar dezenas de consultas repetidas, usamos automaticamente
+        # a ida de menor preço como referência inicial. Se o usuário selecionar
+        # outra ida, a tabela de volta é recalculada para aquela opção.
+        sel_retorno = (
+            st.session_state.get("ida_escolhida")
+            if st.session_state.get("ida_escolhida") in top
+            else top[0]
+        )
+
+        retorno_key = (
+            f"{sel_retorno.get('_token','')}|{sel_retorno.get('Ida','')}|"
+            f"{sel_retorno.get('Volta','')}"
+        )
+
+        if st.session_state.get("retorno_sel_key") != retorno_key:
+            p_retorno = dict(sel_retorno["_params"])
+            p_retorno["departure_token"] = sel_retorno["_token"]
+
+            try:
+                d_retorno, _ = consulta(p_retorno)
+                rr = []
+
+                for item in all_items(d_retorno):
+                    s = summarize(item)
+                    if s:
+                        rr.append({
+                            "Preço total (R$)": s["preco"],
+                            "Data volta": sel_retorno["Volta"],
+                            "Origem": s["origem"],
+                            "Destino": s["destino"],
+                            "Companhia(s)": s["cias"],
+                            "Escalas": s["escalas"],
+                            "Duração": s["duracao"],
+                            "Saída": data_br(s["saida"]),
+                            "Chegada": data_br(s["chegada"]),
+                            "Voos": s["voos"]
+                        })
+
+                if rr:
+                    df_retorno = pd.DataFrame(rr)
+                    df_retorno["Preço total (R$)"] = pd.to_numeric(
+                        df_retorno["Preço total (R$)"],
+                        errors="coerce"
+                    )
+                    st.session_state["retornos"] = df_retorno.sort_values(
+                        ["Preço total (R$)", "Saída"],
+                        na_position="last"
+                    ).reset_index(drop=True)
+                else:
+                    st.session_state.pop("retornos", None)
+
+                st.session_state["retorno_sel_key"] = retorno_key
+
+            except Exception:
+                st.session_state.pop("retornos", None)
+
+        st.markdown("#### Opções de volta")
+        if "retornos" in st.session_state and not st.session_state["retornos"].empty:
+            st.caption(
+                "As opções abaixo já estão disponíveis. Clique em uma linha apenas se quiser marcar a volta preferida."
+            )
+            evento_volta = st.dataframe(
+                st.session_state["retornos"],
+                width="stretch",
+                hide_index=True,
+                on_select="rerun",
+                selection_mode="single-row",
+                key="tabela_voos_volta",
+                column_config={
+                    "Preço total (R$)": st.column_config.NumberColumn(format="R$ %.2f")
+                }
             )
 
-            if st.session_state.get("retorno_sel_key") != retorno_key:
-                p_retorno = dict(sel["_params"])
-                p_retorno["departure_token"] = sel["_token"]
-
-                try:
-                    d_retorno, _ = consulta(p_retorno)
-                    rr = []
-
-                    for item in all_items(d_retorno):
-                        s = summarize(item)
-                        if s:
-                            rr.append({
-                                "Preço total (R$)": s["preco"],
-                                "Data volta": sel["Volta"],
-                                "Origem": s["origem"],
-                                "Destino": s["destino"],
-                                "Companhia(s)": s["cias"],
-                                "Escalas": s["escalas"],
-                                "Duração": s["duracao"],
-                                "Saída": data_br(s["saida"]),
-                                "Chegada": data_br(s["chegada"]),
-                                "Voos": s["voos"]
-                            })
-
-                    if rr:
-                        df_retorno = pd.DataFrame(rr)
-                        df_retorno["Preço total (R$)"] = pd.to_numeric(
-                            df_retorno["Preço total (R$)"],
-                            errors="coerce"
-                        )
-                        st.session_state["retornos"] = df_retorno.sort_values(
-                            ["Preço total (R$)", "Saída"],
-                            na_position="last"
-                        ).reset_index(drop=True)
-                    else:
-                        st.session_state.pop("retornos", None)
-
-                    st.session_state["retorno_sel_key"] = retorno_key
-                    st.session_state["ida_escolhida"] = sel
-
-                except Exception as e:
-                    st.warning(f"Não foi possível carregar as opções de volta: {e}")
-
-            if "retornos" in st.session_state:
-                st.markdown("#### Opções de volta")
-                st.caption("Clique em uma linha para escolher o voo de volta.")
-
-                evento_volta = st.dataframe(
-                    st.session_state["retornos"],
-                    width="stretch",
-                    hide_index=True,
-                    on_select="rerun",
-                    selection_mode="single-row",
-                    key="tabela_voos_volta",
-                    column_config={
-                        "Preço total (R$)": st.column_config.NumberColumn(format="R$ %.2f")
-                    }
+            linhas_volta = list(evento_volta.selection.rows) if evento_volta else []
+            if linhas_volta:
+                idx_volta = int(linhas_volta[0])
+                st.session_state["volta_escolhida"] = (
+                    st.session_state["retornos"].iloc[idx_volta].to_dict()
                 )
-
-                linhas_volta = list(evento_volta.selection.rows) if evento_volta else []
-                if linhas_volta:
-                    idx_volta = int(linhas_volta[0])
-                    st.session_state["volta_escolhida"] = (
-                        st.session_state["retornos"].iloc[idx_volta].to_dict()
-                    )
         else:
-            st.caption("Selecione uma opção de ida na tabela para carregar os voos de volta.")
-
+            st.caption("Não foram encontradas opções de volta para a combinação de menor preço.")
     else:
         st.dataframe(
             df_ida,
