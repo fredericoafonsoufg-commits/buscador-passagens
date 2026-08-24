@@ -336,6 +336,57 @@ def summarize(x):
         "token": x.get("departure_token", "")
     }
 
+def mapa_precos_so_trecho(origens, destinos, datas, adultos, cabine, stops):
+    """
+    Consulta tarifas avulsas (somente ida) e devolve um mapa por
+    data/origem/destino/voos. Estes valores são comparativos e NÃO são uma
+    decomposição do preço de uma passagem ida e volta.
+    """
+    datas = sorted(set(d for d in datas if d))
+    mapa = {}
+    if not datas:
+        return mapa
+
+    def _consulta_data(data_voo):
+        p = params_base(origens, destinos, data_voo, None, int(adultos), cabine, stops)
+        try:
+            d, _ = consulta(p)
+            return data_voo, d
+        except Exception:
+            return data_voo, None
+
+    with ThreadPoolExecutor(max_workers=min(4, len(datas))) as executor:
+        futuros = [executor.submit(_consulta_data, d) for d in datas]
+        for futuro in as_completed(futuros):
+            data_voo, dados = futuro.result()
+            if not dados:
+                continue
+            for item in all_items(dados):
+                s = summarize(item)
+                if not s or not isinstance(s.get("preco"), (int, float)):
+                    continue
+                chave = (
+                    data_br(data_voo),
+                    str(s.get("origem") or ""),
+                    str(s.get("destino") or ""),
+                    str(s.get("voos") or "")
+                )
+                preco = float(s["preco"])
+                if chave not in mapa or preco < mapa[chave]:
+                    mapa[chave] = preco
+    return mapa
+
+
+def preco_so_trecho(mapa, data_txt, origem, destino, voos):
+    chave = (
+        str(data_txt or ""),
+        str(origem or ""),
+        str(destino or ""),
+        str(voos or "")
+    )
+    return mapa.get(chave)
+
+
 def flex(d, n):
     return [d + timedelta(days=i) for i in range(-n, n+1)]
 
@@ -1120,14 +1171,20 @@ def gerar_relatorio_pdf(contexto):
         story.append(Paragraph(f"Menor preço encontrado: <b>{_pdf_money(menor)}</b>", body))
         story.append(Spacer(1, 2*mm))
         cols = ["Preço (R$)","Companhia(s)","Origem","Destino","Saída ida","Chegada ida","Escalas","Duração ida","Voos"]
+        mapa_pdf_ida = contexto.get("mapa_so_ida") or {}
         header = [
-            _pdf_p("Preço", small), _pdf_p("Companhia", small), _pdf_p("Orig.", small),
+            _pdf_p("Só ida", small), _pdf_p("Total ida+volta", small),
+            _pdf_p("Companhia", small), _pdf_p("Orig.", small),
             _pdf_p("Dest.", small), _pdf_p("Saída", small), _pdf_p("Chegada", small),
             _pdf_p("Esc.", small), _pdf_p("Duração", small), _pdf_p("Voo(s)", small)
         ]
         rows_pdf = [header]
         for x in voos[:12]:
+            preco_so_ida_pdf = preco_so_trecho(
+                mapa_pdf_ida, x.get("Ida"), x.get("Origem"), x.get("Destino"), x.get("Voos")
+            )
             rows_pdf.append([
+                _pdf_p(_pdf_money(preco_so_ida_pdf) if preco_so_ida_pdf is not None else "—", small),
                 _pdf_p(_pdf_money(x.get("Preço (R$)")), small),
                 _pdf_p(x.get("Companhia(s)"), small),
                 _pdf_p(x.get("Origem"), small),
@@ -1140,7 +1197,7 @@ def gerar_relatorio_pdf(contexto):
             ])
         tab = Table(
             rows_pdf, repeatRows=1,
-            colWidths=[18*mm,24*mm,11*mm,11*mm,27*mm,27*mm,9*mm,18*mm,27*mm],
+            colWidths=[16*mm,20*mm,21*mm,10*mm,10*mm,24*mm,24*mm,8*mm,17*mm,26*mm],
             hAlign="LEFT"
         )
         tab.setStyle(TableStyle([
@@ -1160,16 +1217,36 @@ def gerar_relatorio_pdf(contexto):
             story.append(Spacer(1, 4*mm))
             story.append(Paragraph("Opções de volta", h2))
 
+            datas_ret_pdf = []
+            for d_txt in retornos_pdf["Data volta"].dropna().unique():
+                try:
+                    datas_ret_pdf.append(datetime.strptime(str(d_txt), "%d/%m/%Y").date())
+                except Exception:
+                    pass
+            mapa_pdf_volta = mapa_precos_so_trecho(
+                contexto.get("dest_codigos", []),
+                contexto.get("orig_codigos", []),
+                datas_ret_pdf,
+                contexto.get("adultos", 1),
+                contexto.get("cabine_codigo", 1),
+                contexto.get("stops_codigo", 0)
+            )
+
             ret_header = [
-                _pdf_p("Preço total", small), _pdf_p("Data", small),
-                _pdf_p("Orig.", small), _pdf_p("Dest.", small),
+                _pdf_p("Só volta", small), _pdf_p("Total ida+volta", small),
+                _pdf_p("Data", small), _pdf_p("Orig.", small), _pdf_p("Dest.", small),
                 _pdf_p("Companhia", small), _pdf_p("Saída", small),
                 _pdf_p("Chegada", small), _pdf_p("Esc.", small),
                 _pdf_p("Duração", small), _pdf_p("Voo(s)", small)
             ]
             ret_rows = [ret_header]
             for _, r in retornos_pdf.drop(columns=["_data_principal"], errors="ignore").head(12).iterrows():
+                preco_so_volta_pdf = preco_so_trecho(
+                    mapa_pdf_volta, r.get("Data volta"), r.get("Origem"),
+                    r.get("Destino"), r.get("Voos")
+                )
                 ret_rows.append([
+                    _pdf_p(_pdf_money(preco_so_volta_pdf) if preco_so_volta_pdf is not None else "—", small),
                     _pdf_p(_pdf_money(r.get("Preço total (R$)")), small),
                     _pdf_p(r.get("Data volta"), small),
                     _pdf_p(r.get("Origem"), small),
@@ -1184,7 +1261,7 @@ def gerar_relatorio_pdf(contexto):
 
             ret_tab = Table(
                 ret_rows, repeatRows=1,
-                colWidths=[18*mm,17*mm,10*mm,10*mm,22*mm,25*mm,25*mm,9*mm,17*mm,27*mm],
+                colWidths=[15*mm,19*mm,16*mm,9*mm,9*mm,20*mm,23*mm,23*mm,8*mm,16*mm,24*mm],
                 hAlign="LEFT"
             )
             ret_tab.setStyle(TableStyle([
@@ -1748,6 +1825,8 @@ if st.button(
         "volta": volta0,
         "adultos": int(adultos) if adultos else "-",
         "cabine": cab_pt,
+    "cabine_codigo": cab,
+    "stops_codigo": stops,
         "conexoes": stop_pt,
     }
 
@@ -1767,14 +1846,43 @@ if rank:
     st.metric("Menor preço encontrado", brl(menor))
 
     top = rank[:20]
-    df_ida = pd.DataFrame([
-        {k: v for k, v in x.items() if not k.startswith("_")}
-        for x in top
-    ])
+
+    # Preço avulso de cada voo de ida. É uma pesquisa "somente ida",
+    # não uma divisão do valor total da passagem ida e volta.
+    mapa_so_ida = {}
+    if volta0:
+        datas_ida_exibidas = []
+        for x in top:
+            try:
+                datas_ida_exibidas.append(datetime.strptime(x["Ida"], "%d/%m/%Y").date())
+            except Exception:
+                pass
+        mapa_so_ida = mapa_precos_so_trecho(
+            orig, dest, datas_ida_exibidas, adultos, cab, stops
+        )
+
+    linhas_ida_tabela = []
+    for x in top:
+        linha = {k: v for k, v in x.items() if not k.startswith("_")}
+        if volta0:
+            preco_avulso_ida = preco_so_trecho(
+                mapa_so_ida, x.get("Ida"), x.get("Origem"),
+                x.get("Destino"), x.get("Voos")
+            )
+            linha["Só ida (R$)"] = preco_avulso_ida
+            # O preço original do Google Flights em pesquisa ida e volta
+            # representa o itinerário completo.
+            linha["Total ida + volta (R$)"] = linha.pop("Preço (R$)")
+        linhas_ida_tabela.append(linha)
+
+    df_ida = pd.DataFrame(linhas_ida_tabela)
 
     if volta0:
         st.markdown("#### Opções de ida")
-        st.caption("Clique em uma linha apenas se quiser marcar sua opção preferida.")
+        st.caption(
+            "“Só ida” é o preço avulso daquele voo pesquisado separadamente. "
+            "“Total ida + volta” é o preço do itinerário completo."
+        )
 
         evento_ida = st.dataframe(
             df_ida,
@@ -1784,7 +1892,8 @@ if rank:
             selection_mode="single-row",
             key="tabela_voos_ida",
             column_config={
-                "Preço (R$)": st.column_config.NumberColumn(format="R$ %.2f")
+                "Só ida (R$)": st.column_config.NumberColumn(format="R$ %.2f"),
+                "Total ida + volta (R$)": st.column_config.NumberColumn(format="R$ %.2f")
             }
         )
 
@@ -1902,14 +2011,43 @@ if rank:
                 datas_txt = ", ".join(data_br(d) for d in flex(volta0, fv))
                 st.caption(
                     f"Datas pesquisadas para a volta: {datas_txt}. "
-                    f"A data principal é {data_br(volta0)}."
+                    f"A data principal é {data_br(volta0)}. "
+                    "“Só volta” é a tarifa avulsa pesquisada separadamente."
                 )
             else:
                 st.caption(f"Data da volta: {data_br(volta0)}.")
 
+            # Consulta o valor avulso (somente volta) para os voos exibidos.
+            datas_retorno_exibidas = []
+            for d_txt in st.session_state["retornos"]["Data volta"].dropna().unique():
+                try:
+                    datas_retorno_exibidas.append(datetime.strptime(str(d_txt), "%d/%m/%Y").date())
+                except Exception:
+                    pass
+
+            mapa_so_volta = mapa_precos_so_trecho(
+                dest, orig, datas_retorno_exibidas, adultos, cab, stops
+            )
+
             df_volta_visivel = st.session_state["retornos"].drop(
                 columns=["_data_principal"],
                 errors="ignore"
+            ).copy()
+
+            df_volta_visivel["Só volta (R$)"] = df_volta_visivel.apply(
+                lambda r: preco_so_trecho(
+                    mapa_so_volta,
+                    r.get("Data volta"),
+                    r.get("Origem"),
+                    r.get("Destino"),
+                    r.get("Voos")
+                ),
+                axis=1
+            )
+
+            # Mantém o preço total da combinação e mostra também o trecho avulso.
+            df_volta_visivel = df_volta_visivel.rename(
+                columns={"Preço total (R$)": "Total ida + volta (R$)"}
             )
 
             evento_volta = st.dataframe(
@@ -1920,7 +2058,8 @@ if rank:
                 selection_mode="single-row",
                 key="tabela_voos_volta",
                 column_config={
-                    "Preço total (R$)": st.column_config.NumberColumn(format="R$ %.2f")
+                    "Só volta (R$)": st.column_config.NumberColumn(format="R$ %.2f"),
+                    "Total ida + volta (R$)": st.column_config.NumberColumn(format="R$ %.2f")
                 }
             )
 
@@ -2558,6 +2697,8 @@ except Exception:
 contexto_pdf = {
     "origem": ", ".join(orig) if orig else "-",
     "destino": ", ".join(dest) if dest else "-",
+    "orig_codigos": list(orig),
+    "dest_codigos": list(dest),
     "tipo": "Ida e volta" if volta0 else "Só ida",
     "cabine": cab_pt,
     "ida": data_br(ida0) if ida0 else "-",
@@ -2568,6 +2709,7 @@ contexto_pdf = {
     "ida_escolhida": st.session_state.get("ida_escolhida"),
     "volta_escolhida": st.session_state.get("volta_escolhida"),
     "retornos": st.session_state.get("retornos"),
+    "mapa_so_ida": mapa_so_ida if "mapa_so_ida" in locals() else {},
     "preco_atual": float(st.session_state.get("preco_ref",0) or 0),
     "historico": hist_pdf,
     "usar_milhas_pdf": tem_milhas == "Sim",
