@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
-from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.platypus import (
@@ -869,9 +869,9 @@ def gerar_relatorio_pdf(contexto):
     buf = BytesIO()
     doc = SimpleDocTemplate(
         buf,
-        pagesize=landscape(A4),
-        rightMargin=13*mm, leftMargin=13*mm,
-        topMargin=12*mm, bottomMargin=13*mm,
+        pagesize=A4,
+        rightMargin=9*mm, leftMargin=9*mm,
+        topMargin=8*mm, bottomMargin=9*mm,
         title="Frederico Travel Tools - Relatório de Pesquisa"
     )
 
@@ -883,12 +883,12 @@ def gerar_relatorio_pdf(contexto):
     gray = colors.HexColor("#617087")
 
     h1 = ParagraphStyle("FTTH1", parent=styles["Heading1"], fontName="Helvetica-Bold",
-                        fontSize=20, leading=24, textColor=navy, spaceAfter=6)
+                        fontSize=17, leading=20, textColor=navy, spaceAfter=4)
     h2 = ParagraphStyle("FTTH2", parent=styles["Heading2"], fontName="Helvetica-Bold",
-                        fontSize=14, leading=18, textColor=navy, spaceBefore=8, spaceAfter=7)
+                        fontSize=12, leading=14, textColor=navy, spaceBefore=5, spaceAfter=4)
     body = ParagraphStyle("FTTBody", parent=styles["BodyText"], fontName="Helvetica",
-                          fontSize=8.6, leading=12, textColor=colors.HexColor("#26364A"))
-    small = ParagraphStyle("FTTSmall", parent=body, fontSize=7.4, leading=9, textColor=gray)
+                          fontSize=7.8, leading=10, textColor=colors.HexColor("#26364A"))
+    small = ParagraphStyle("FTTSmall", parent=body, fontSize=6.8, leading=8, textColor=gray)
     center = ParagraphStyle("FTTCenter", parent=body, alignment=TA_CENTER)
     story = []
     secao = [0]
@@ -900,7 +900,7 @@ def gerar_relatorio_pdf(contexto):
 
     logo_file = BASE / "assets" / "frederico_travel_tools_logo.png"
     if logo_file.exists():
-        story.append(RLImage(str(logo_file), width=105*mm, height=31*mm))
+        story.append(RLImage(str(logo_file), width=78*mm, height=23*mm))
         story.append(Spacer(1, 2*mm))
 
     story.append(Paragraph("Relatório completo da pesquisa de passagens", h1))
@@ -918,7 +918,7 @@ def gerar_relatorio_pdf(contexto):
         ["Ida", contexto.get("ida","-"), "Volta", contexto.get("volta","-")],
         ["Adultos", str(contexto.get("adultos","-")), "Conexões", contexto.get("conexoes","-")],
     ]
-    t = Table(dados, colWidths=[27*mm, 70*mm, 27*mm, 70*mm])
+    t = Table(dados, colWidths=[22*mm, 68*mm, 22*mm, 68*mm])
     t.setStyle(TableStyle([
         ("BACKGROUND",(0,0),(-1,-1),colors.white),
         ("BOX",(0,0),(-1,-1),.5,line),
@@ -945,7 +945,7 @@ def gerar_relatorio_pdf(contexto):
         cols = ["Preço (R$)","Companhia(s)","Origem","Destino","Saída ida","Chegada ida","Escalas","Duração ida","Voos"]
         header = ["Preço","Companhia","Orig.","Dest.","Saída","Chegada","Esc.","Duração","Voo(s)"]
         rows_pdf = [header]
-        for x in voos[:20]:
+        for x in voos[:12]:
             rows_pdf.append([
                 _pdf_money(x.get("Preço (R$)")),
                 _pdf_safe(x.get("Companhia(s)")),
@@ -957,11 +957,11 @@ def gerar_relatorio_pdf(contexto):
                 _pdf_safe(x.get("Duração ida")),
                 _pdf_safe(x.get("Voos")),
             ])
-        tab = Table(rows_pdf, repeatRows=1, colWidths=[22*mm,42*mm,15*mm,15*mm,31*mm,31*mm,12*mm,22*mm,32*mm])
+        tab = Table(rows_pdf, repeatRows=1, colWidths=[19*mm,27*mm,12*mm,12*mm,28*mm,28*mm,10*mm,19*mm,24*mm])
         tab.setStyle(TableStyle([
             ("BACKGROUND",(0,0),(-1,0),navy),("TEXTCOLOR",(0,0),(-1,0),colors.white),
             ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),
-            ("FONTSIZE",(0,0),(-1,-1),7.1),
+            ("FONTSIZE",(0,0),(-1,-1),5.8),
             ("GRID",(0,0),(-1,-1),.3,line),
             ("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white, light]),
             ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
@@ -993,12 +993,12 @@ def gerar_relatorio_pdf(contexto):
                     _pdf_safe(ida_sel.get("Voos")),
                 ]
             ]
-            ida_tab = Table(ida_rows, colWidths=[13*mm,22*mm,15*mm,15*mm,35*mm,33*mm,33*mm,22*mm,28*mm])
+            ida_tab = Table(ida_rows, colWidths=[11*mm,19*mm,12*mm,12*mm,27*mm,27*mm,27*mm,18*mm,22*mm])
             ida_tab.setStyle(TableStyle([
                 ("BACKGROUND",(0,0),(-1,0),navy),("TEXTCOLOR",(0,0),(-1,0),colors.white),
                 ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),
                 ("GRID",(0,0),(-1,-1),.3,line),
-                ("FONTSIZE",(0,0),(-1,-1),7.2),
+                ("FONTSIZE",(0,0),(-1,-1),5.8),
                 ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
             ]))
             story.append(ida_tab)
@@ -1019,24 +1019,23 @@ def gerar_relatorio_pdf(contexto):
                     _pdf_safe(volta_sel.get("Voos")),
                 ]
             ]
-            volta_tab = Table(volta_rows, colWidths=[13*mm,22*mm,15*mm,15*mm,35*mm,33*mm,33*mm,22*mm,28*mm])
+            volta_tab = Table(volta_rows, colWidths=[11*mm,19*mm,12*mm,12*mm,27*mm,27*mm,27*mm,18*mm,22*mm])
             volta_tab.setStyle(TableStyle([
                 ("BACKGROUND",(0,0),(-1,0),navy),("TEXTCOLOR",(0,0),(-1,0),colors.white),
                 ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),
                 ("GRID",(0,0),(-1,-1),.3,line),
-                ("FONTSIZE",(0,0),(-1,-1),7.2),
+                ("FONTSIZE",(0,0),(-1,-1),5.8),
                 ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
             ]))
             story.append(volta_tab)
 
     # Histórico
-    story.append(PageBreak())
     story.append(Paragraph(titulo_secao("Histórico de preços"), h2))
     hist = contexto.get("historico")
     if hist is not None and not hist.empty:
         chart = _pdf_chart_history(hist, contexto.get("preco_atual"))
         if chart:
-            story.append(RLImage(chart, width=230*mm, height=82*mm))
+            story.append(RLImage(chart, width=180*mm, height=62*mm))
         vals = pd.to_numeric(hist["Preço (R$)"], errors="coerce").dropna()
         if not vals.empty:
             metrics = [
@@ -1045,7 +1044,7 @@ def gerar_relatorio_pdf(contexto):
                  "Menor", _pdf_money(vals.min()),
                  "Maior", _pdf_money(vals.max())]
             ]
-            mt = Table(metrics, colWidths=[24*mm,30*mm]*4)
+            mt = Table(metrics, colWidths=[21*mm,24*mm]*4)
             mt.setStyle(TableStyle([
                 ("BOX",(0,0),(-1,-1),.5,line),("INNERGRID",(0,0),(-1,-1),.3,line),
                 ("BACKGROUND",(0,0),(-1,-1),colors.white),
@@ -1063,56 +1062,57 @@ def gerar_relatorio_pdf(contexto):
     else:
         story.append(Paragraph("Ainda não há histórico suficiente para esta pesquisa.", body))
 
-    # Milhas e comparador
-    story.append(Spacer(1, 5*mm))
-    story.append(Paragraph(titulo_secao("Saldos e comparação com milhas"), h2))
-    saldos = contexto.get("saldos", {})
-    saldo_tbl = Table([
-        ["LATAM Pass","Smiles","Azul Fidelidade"],
-        [pts(saldos.get("LATAM Pass",0)), pts(saldos.get("Smiles",0)), pts(saldos.get("Azul Fidelidade",0))]
-    ], colWidths=[65*mm]*3)
-    saldo_tbl.setStyle(TableStyle([
-        ("BACKGROUND",(0,0),(-1,0),navy),("TEXTCOLOR",(0,0),(-1,0),colors.white),
-        ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),("ALIGN",(0,0),(-1,-1),"CENTER"),
-        ("BOX",(0,0),(-1,-1),.5,line),("INNERGRID",(0,0),(-1,-1),.3,line),
-        ("FONTSIZE",(0,0),(-1,-1),9),("TOPPADDING",(0,0),(-1,-1),7),("BOTTOMPADDING",(0,0),(-1,-1),7)
-    ]))
-    story.append(saldo_tbl)
-    story.append(Spacer(1, 4*mm))
-
-    comp = contexto.get("ranking_milhas")
-    if comp is not None and not comp.empty:
-        headers = list(comp.columns)
-        rows_comp = [headers]
-        for _, r in comp.iterrows():
-            row = []
-            for c in headers:
-                v = r[c]
-                if c in ("Desembolso imediato","Custo econômico"):
-                    row.append(_pdf_money(v))
-                elif "Milhas" in c or "Saldo" in c:
-                    try: row.append(pts(v))
-                    except: row.append(_pdf_safe(v))
-                else:
-                    row.append(_pdf_safe(v))
-            rows_comp.append(row)
-        widths = [16*mm,44*mm,34*mm,34*mm,29*mm,29*mm,29*mm][:len(headers)]
-        ct = Table(rows_comp, repeatRows=1, colWidths=widths)
-        ct.setStyle(TableStyle([
+    # Milhas e comparador - só entra no PDF quando o usuário informou que possui programa.
+    if contexto.get("usar_milhas_pdf"):
+        story.append(Spacer(1, 4*mm))
+        story.append(Paragraph(titulo_secao("Saldos e comparação com milhas"), h2))
+        saldos = contexto.get("saldos", {})
+        saldo_tbl = Table([
+            ["LATAM Pass","Smiles","Azul Fidelidade"],
+            [pts(saldos.get("LATAM Pass",0)), pts(saldos.get("Smiles",0)), pts(saldos.get("Azul Fidelidade",0))]
+        ], colWidths=[60*mm]*3)
+        saldo_tbl.setStyle(TableStyle([
             ("BACKGROUND",(0,0),(-1,0),navy),("TEXTCOLOR",(0,0),(-1,0),colors.white),
-            ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),
-            ("GRID",(0,0),(-1,-1),.3,line),
-            ("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white, light]),
-            ("FONTSIZE",(0,0),(-1,-1),7.2),
-            ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
-            ("LEFTPADDING",(0,0),(-1,-1),4),("RIGHTPADDING",(0,0),(-1,-1),4),
-            ("TOPPADDING",(0,0),(-1,-1),5),("BOTTOMPADDING",(0,0),(-1,-1),5),
+            ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),("ALIGN",(0,0),(-1,-1),"CENTER"),
+            ("BOX",(0,0),(-1,-1),.5,line),("INNERGRID",(0,0),(-1,-1),.3,line),
+            ("FONTSIZE",(0,0),(-1,-1),8),("TOPPADDING",(0,0),(-1,-1),5),("BOTTOMPADDING",(0,0),(-1,-1),5)
         ]))
-        story.append(ct)
+        story.append(saldo_tbl)
+        story.append(Spacer(1, 3*mm))
+
+        comp = contexto.get("ranking_milhas")
+        if comp is not None and not comp.empty:
+            headers = list(comp.columns)
+            rows_comp = [headers]
+            for _, r in comp.iterrows():
+                row = []
+                for c in headers:
+                    v = r[c]
+                    if c in ("Desembolso imediato","Custo econômico"):
+                        row.append(_pdf_money(v))
+                    elif "Milhas" in c or "Saldo" in c:
+                        try: row.append(pts(v))
+                        except: row.append(_pdf_safe(v))
+                    else:
+                        row.append(_pdf_safe(v))
+                rows_comp.append(row)
+            widths = [16*mm,44*mm,34*mm,34*mm,29*mm,29*mm,29*mm][:len(headers)]
+            ct = Table(rows_comp, repeatRows=1, colWidths=widths)
+            ct.setStyle(TableStyle([
+                ("BACKGROUND",(0,0),(-1,0),navy),("TEXTCOLOR",(0,0),(-1,0),colors.white),
+                ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),
+                ("GRID",(0,0),(-1,-1),.3,line),
+                ("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white, light]),
+                ("FONTSIZE",(0,0),(-1,-1),7.2),
+                ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
+                ("LEFTPADDING",(0,0),(-1,-1),4),("RIGHTPADDING",(0,0),(-1,-1),4),
+                ("TOPPADDING",(0,0),(-1,-1),5),("BOTTOMPADDING",(0,0),(-1,-1),5),
+            ]))
+            story.append(ct)
 
     # Tabela fixa
     fixa = contexto.get("tabela_fixa")
-    if fixa:
+    if fixa and contexto.get("usar_milhas_pdf"):
         story.append(Spacer(1, 5*mm))
         story.append(Paragraph(titulo_secao("Tabela fixa aplicável"), h2))
         fixa_rows = [
@@ -1122,7 +1122,7 @@ def gerar_relatorio_pdf(contexto):
             ["Preço máximo do milheiro", _pdf_money(fixa.get("max_milheiro",0)) + " / 1.000",
              "Disponibilidade", fixa.get("disponibilidade","-")],
         ]
-        ft = Table(fixa_rows, colWidths=[38*mm,64*mm,48*mm,64*mm])
+        ft = Table(fixa_rows, colWidths=[34*mm,56*mm,40*mm,50*mm])
         ft.setStyle(TableStyle([
             ("BOX",(0,0),(-1,-1),.5,line),("INNERGRID",(0,0),(-1,-1),.3,line),
             ("ROWBACKGROUNDS",(0,0),(-1,-1),[colors.white, light]),
@@ -1140,7 +1140,7 @@ def gerar_relatorio_pdf(contexto):
     if rec:
         story.append(Spacer(1, 5*mm))
         story.append(Paragraph(titulo_secao("Recomendação"), h2))
-        story.append(Table([[Paragraph(_pdf_safe(rec), body)]], colWidths=[230*mm],
+        story.append(Table([[Paragraph(_pdf_safe(rec), body)]], colWidths=[180*mm],
                            style=TableStyle([
                                ("BACKGROUND",(0,0),(-1,-1),colors.HexColor("#EAF7EE")),
                                ("BOX",(0,0),(-1,-1),.6,colors.HexColor("#B9DFC4")),
@@ -1216,6 +1216,37 @@ section[data-testid="stSidebar"],
 [data-testid="stSidebarContent"] > div:first-child {
     margin-top:0 !important;
     padding-top:0 !important;
+}
+</style>
+""")
+
+
+st.html("""
+<style>
+/* Remove a faixa reservada no topo da barra lateral. */
+[data-testid="stSidebarHeader"] {
+    display:none !important;
+    height:0 !important;
+    min-height:0 !important;
+    max-height:0 !important;
+    padding:0 !important;
+    margin:0 !important;
+}
+[data-testid="stSidebarContent"] {
+    padding-top:0 !important;
+    margin-top:0 !important;
+}
+[data-testid="stSidebarContent"] > div {
+    padding-top:0 !important;
+    margin-top:0 !important;
+}
+[data-testid="stSidebar"] [data-testid="stImage"] {
+    margin-top:0 !important;
+    padding-top:0 !important;
+}
+[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
+    padding-top:0 !important;
+    margin-top:0 !important;
 }
 </style>
 """)
@@ -2186,9 +2217,10 @@ contexto_pdf = {
     "volta_escolhida": st.session_state.get("volta_escolhida"),
     "preco_atual": float(st.session_state.get("preco_ref",0) or 0),
     "historico": hist_pdf,
-    "saldos": {"LATAM Pass": lat, "Smiles": smi, "Azul Fidelidade": azu},
-    "ranking_milhas": rdf if "rdf" in locals() else None,
-    "tabela_fixa": tabela_fixa_pdf,
+    "usar_milhas_pdf": tem_milhas == "Sim",
+    "saldos": {"LATAM Pass": lat, "Smiles": smi, "Azul Fidelidade": azu} if tem_milhas == "Sim" else {},
+    "ranking_milhas": (rdf if "rdf" in locals() else None) if tem_milhas == "Sim" else None,
+    "tabela_fixa": tabela_fixa_pdf if tem_milhas == "Sim" else None,
     "recomendacao": recomendacao_pdf,
 }
 
