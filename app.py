@@ -1161,43 +1161,47 @@ def gerar_relatorio_pdf(contexto):
 
 
 
-# Top navigation / section shortcuts
-st.markdown("""
-<style>
-.fttNavApproved{
-  display:flex;align-items:center;justify-content:center;gap:34px;
-  background:#fff;border-bottom:1px solid #e8edf4;
-  padding:13px 18px;margin:-2px 0 18px;border-radius:0;
-}
-.fttNavApproved a{
-  color:#0c204d;text-decoration:none;font-weight:700;font-size:.94rem;
-  padding:9px 8px 12px;border-bottom:2px solid transparent;
-}
-.fttNavApproved a:first-child{color:#087CF0;border-bottom-color:#087CF0}
-.fttNavApproved a:hover{color:#087CF0}
-.fttNavApproved .grow{flex:1}
-.fttNavApproved .version{
-  background:#f2f7fd;color:#087CF0;border:1px solid #dde8f6;
-  border-radius:999px;padding:7px 12px;font-weight:800;font-size:.80rem;
-}
-.fttNavApproved .avatar{
-  width:36px;height:36px;border-radius:50%;background:#087CF0;color:#fff;
-  display:flex;align-items:center;justify-content:center;font-size:.82rem;font-weight:800;
-}
-</style>
-""", unsafe_allow_html=True)
 
 st.markdown("""
-<div class="fttNavApproved">
-  <a href="#buscador">Buscador</a>
-  <a href="#precos">Preços</a>
-  <a href="#milhas">Milhas</a>
-  <a href="#historico">Histórico</a>
-  <a href="#relatorios">Relatórios</a>
-  <div class="grow"></div>
-  <div class="version">V15.8 Web</div>
-  <div class="avatar">FA</div>
-</div>
+<style>
+/* Layout compacto: elimina espaços superiores desnecessários. */
+header[data-testid="stHeader"] {
+    display:none !important;
+    height:0 !important;
+    min-height:0 !important;
+}
+[data-testid="stAppViewContainer"] {
+    padding-top:0 !important;
+}
+[data-testid="stAppViewContainer"] > .main {
+    padding-top:0 !important;
+}
+[data-testid="stAppViewContainer"] > .main > div {
+    padding-top:0 !important;
+}
+.main .block-container,
+[data-testid="stMainBlockContainer"] {
+    padding-top:0.35rem !important;
+    margin-top:0 !important;
+}
+[data-testid="stSidebar"] {
+    top:0 !important;
+    padding-top:0 !important;
+}
+[data-testid="stSidebar"] > div:first-child {
+    padding-top:0 !important;
+}
+[data-testid="stSidebar"] .block-container,
+[data-testid="stSidebarContent"] {
+    padding-top:0.35rem !important;
+    margin-top:0 !important;
+}
+/* A marca deve ficar próxima do topo, sem faixa vazia acima. */
+[data-testid="stSidebar"] [data-testid="stImage"] {
+    margin-top:0 !important;
+    padding-top:0 !important;
+}
+</style>
 """, unsafe_allow_html=True)
 
 if "_pesquisa_versao" not in st.session_state:
