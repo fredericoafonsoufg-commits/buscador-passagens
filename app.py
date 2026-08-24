@@ -1195,49 +1195,35 @@ st.markdown("""
   <a href="#historico">Histórico</a>
   <a href="#relatorios">Relatórios</a>
   <div class="grow"></div>
-  <div class="version">V15.7 Web</div>
+  <div class="version">V15.8 Web</div>
   <div class="avatar">FA</div>
 </div>
 """, unsafe_allow_html=True)
+
+if "_pesquisa_versao" not in st.session_state:
+    st.session_state["_pesquisa_versao"] = 0
 
 with st.sidebar:
     marca_sidebar = BASE / "assets" / "marca_sidebar_aprovada.png"
     if marca_sidebar.exists():
         st.image(str(marca_sidebar), width="stretch")
     def _limpar_nova_pesquisa():
-        # Limpa somente os dados da consulta atual.
-        # Mantém autenticação, saldos salvos e demais preferências da sessão.
-        chaves_pesquisa = [
-            "origem_aeroportos",
-            "destino_aeroportos",
-            "tipo_viagem",
-            "data_ida",
-            "data_volta",
-            "_ida_usada_na_volta",
-            "flex_ida",
-            "flex_volta",
-            "cabine",
-            "conexoes",
-            "rank",
-            "uso",
-            "retornos",
-            "preco_ref",
-            "ultima_pesquisa",
-            "price_insights_raw",
-            "_ultimo_ponto_salvo",
-            "retorno_sel_key",
-            "ida_escolhida",
-            "volta_escolhida",
-            "tabela_voos_ida",
-            "tabela_voos_volta",
-            "voo_ida_selecionado",
-            "periodo_historico",
+        # Cria um novo conjunto de widgets. Isso garante que os campos
+        # reapareçam realmente vazios, sem reutilizar valores do navegador.
+        st.session_state["_pesquisa_versao"] = int(
+            st.session_state.get("_pesquisa_versao", 0)
+        ) + 1
+
+        # Limpa somente resultados e escolhas da consulta anterior.
+        for _k in [
+            "rank", "uso", "retornos", "preco_ref", "ultima_pesquisa",
+            "price_insights_raw", "_ultimo_ponto_salvo", "retorno_sel_key",
+            "ida_escolhida", "volta_escolhida", "periodo_historico",
             "tem_programas_milhas"
-        ]
-        for _k in chaves_pesquisa:
+        ]:
             st.session_state.pop(_k, None)
 
-        # Remove também chaves dinâmicas de simulação da consulta atual.
+        # Remove dados temporários de simulação.
         for _k in list(st.session_state.keys()):
             if (
                 _k.startswith("req_v15_")
@@ -1245,10 +1231,9 @@ with st.sidebar:
                 or _k.startswith("buy_v15_")
                 or _k.startswith("fixed_buy_")
                 or _k.startswith("cabine_fixa_")
+                or _k.startswith("tabela_voos_")
             ):
                 st.session_state.pop(_k, None)
-
-        st.session_state["adultos"] = 1
 
     st.button(
         "Nova pesquisa",
@@ -1257,14 +1242,16 @@ with st.sidebar:
         on_click=_limpar_nova_pesquisa
     )
 
+    vpesq = int(st.session_state.get("_pesquisa_versao", 0))
+
     orig_txt = campo_aeroporto_inteligente(
         "Origem",
-        "origem"
+        f"origem_{vpesq}"
     )
 
     dest_txt = campo_aeroporto_inteligente(
         "Destino",
-        "destino"
+        f"destino_{vpesq}"
     )
 
     tipo_viagem = st.radio(
@@ -1272,7 +1259,7 @@ with st.sidebar:
         ["Só ida", "Ida e volta"],
         horizontal=True,
         index=None,
-        key="tipo_viagem"
+        key=f"tipo_viagem_{vpesq}"
     )
 
     ida0 = st.date_input(
@@ -1280,35 +1267,35 @@ with st.sidebar:
         value=None,
         min_value=date.today(),
         format="DD/MM/YYYY",
-        key="data_ida"
+        key=f"data_ida_{vpesq}"
     )
 
     if tipo_viagem == "Ida e volta":
         volta_sugerida = (ida0 + timedelta(days=1)) if ida0 else None
-        if ida0 and st.session_state.get("_ida_usada_na_volta") != ida0:
-            st.session_state["data_volta"] = volta_sugerida
-            st.session_state["_ida_usada_na_volta"] = ida0
+        if ida0 and st.session_state.get(f"_ida_usada_na_volta_{vpesq}") != ida0:
+            st.session_state[f"data_volta_{vpesq}"] = volta_sugerida
+            st.session_state[f"_ida_usada_na_volta_{vpesq}"] = ida0
 
         volta0 = st.date_input(
             "Data da volta",
-            value=st.session_state.get("data_volta", volta_sugerida),
+            value=st.session_state.get(f"data_volta_{vpesq}", volta_sugerida),
             min_value=ida0 if ida0 else date.today(),
             format="DD/MM/YYYY",
-            key="data_volta"
+            key=f"data_volta_{vpesq}"
         )
     else:
         volta0 = None
 
-    fi = st.selectbox("Flexibilidade da ida", [0,1,2,3,5,7], index=None, placeholder="Selecione", key="flex_ida")
+    fi = st.selectbox("Flexibilidade da ida", [0,1,2,3,5,7], index=None, placeholder="Selecione", key=f"flex_ida_{vpesq}")
     if tipo_viagem == "Ida e volta":
-        fv = st.selectbox("Flexibilidade da volta", [0,1,2,3,5,7], index=None, placeholder="Selecione", key="flex_volta")
+        fv = st.selectbox("Flexibilidade da volta", [0,1,2,3,5,7], index=None, placeholder="Selecione", key=f"flex_volta_{vpesq}")
     else:
         fv = 0
     adultos = st.selectbox(
         "Adultos",
         list(range(1, 10)),
         index=0,
-        key="adultos"
+        key=f"adultos_{vpesq}"
     )
 
     if True:
@@ -1317,7 +1304,7 @@ with st.sidebar:
             ["Econômica", "Premium Economy", "Executiva", "Primeira"],
             index=None,
             placeholder="Selecione",
-            key="cabine"
+            key=f"cabine_{vpesq}"
         )
         cab = {
             "Econômica": 1,
@@ -1331,7 +1318,7 @@ with st.sidebar:
             ["Qualquer quantidade", "Somente direto", "Até 1 conexão", "Até 2 conexões"],
             index=None,
             placeholder="Selecione",
-            key="conexoes"
+            key=f"conexoes_{vpesq}"
         )
         stops = {
             "Qualquer quantidade": 0,
