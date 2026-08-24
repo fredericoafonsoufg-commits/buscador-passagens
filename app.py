@@ -1126,7 +1126,7 @@ st.markdown("""
   <a href="#historico">Histórico</a>
   <a href="#relatorios">Relatórios</a>
   <div class="grow"></div>
-  <div class="version">V15.3 Web</div>
+  <div class="version">V15.4 Web</div>
   <div class="avatar">FA</div>
 </div>
 """, unsafe_allow_html=True)
@@ -1184,8 +1184,7 @@ with st.sidebar:
     adultos = st.selectbox(
         "Adultos",
         list(range(1, 10)),
-        index=None,
-        placeholder="Selecione"
+        index=0
     )
 
     if True:
@@ -1223,7 +1222,10 @@ campos_prontos = bool(
     and cab_pt and stop_pt
 )
 if not campos_prontos:
-    for _k in ["rank", "uso", "retornos", "preco_ref", "ultima_pesquisa", "price_insights_raw"]:
+    for _k in [
+        "rank", "uso", "retornos", "preco_ref", "ultima_pesquisa",
+        "price_insights_raw", "retorno_sel_key", "ida_escolhida", "volta_escolhida"
+    ]:
         st.session_state.pop(_k, None)
 
 comb = []
@@ -1259,6 +1261,8 @@ if st.button(
     disabled=not pode_pesquisar,
     width="stretch"
 ):
+    for _k in ["retornos", "retorno_sel_key", "ida_escolhida", "volta_escolhida"]:
+        st.session_state.pop(_k, None)
     rows = []
     novas = reap = 0
     prog = st.progress(0)
@@ -1327,97 +1331,115 @@ if rank:
     st.metric("Menor preço encontrado", brl(menor))
 
     top = rank[:20]
+    df_ida = pd.DataFrame([
+        {k: v for k, v in x.items() if not k.startswith("_")}
+        for x in top
+    ])
+
     if volta0:
         st.markdown("#### Opções de ida")
-        st.caption("O preço mostrado é o total da viagem. Escolha uma ida abaixo para ver os horários disponíveis de volta.")
-    st.dataframe(
-        pd.DataFrame([{k:v for k,v in x.items() if not k.startswith("_")} for x in top]),
-        width="stretch",
-        hide_index=True,
-        column_config={
-            "Preço (R$)": st.column_config.NumberColumn(format="R$ %.2f")
-        }
-    )
+        st.caption("Clique em uma linha para escolher o voo de ida.")
 
-    if volta0:
-        st.subheader("Escolha a ida e veja a volta")
-
-        labels = [
-            f"{i+1}. {brl(x['Preço (R$)'])} | {x['Ida']} | "
-            f"{x['Origem']} → {x['Destino']} | {x['Saída ida']} | "
-            f"{x['Companhia(s)']} | {x['Duração ida']}"
-            for i, x in enumerate(top)
-        ]
-
-        choice = st.selectbox(
-            "Voo de ida",
-            labels,
-            key="voo_ida_selecionado"
-        )
-        sel = top[labels.index(choice)]
-
-        st.markdown("#### Ida selecionada")
-        st.caption(
-            f"{sel['Ida']} · {sel['Origem']} → {sel['Destino']} · "
-            f"saída {sel['Saída ida']} · chegada {sel['Chegada ida']} · "
-            f"{sel['Companhia(s)']} · {sel['Duração ida']}"
+        evento_ida = st.dataframe(
+            df_ida,
+            width="stretch",
+            hide_index=True,
+            on_select="rerun",
+            selection_mode="single-row",
+            key="tabela_voos_ida",
+            column_config={
+                "Preço (R$)": st.column_config.NumberColumn(format="R$ %.2f")
+            }
         )
 
-        # Busca automaticamente as opções de retorno da ida selecionada.
-        retorno_key = f"{sel.get('_token','')}|{sel.get('Ida','')}|{sel.get('Volta','')}"
-        if st.session_state.get("retorno_sel_key") != retorno_key:
-            p_retorno = dict(sel["_params"])
-            p_retorno["departure_token"] = sel["_token"]
+        linhas_ida = list(evento_ida.selection.rows) if evento_ida else []
 
-            try:
-                d_retorno, _ = consulta(p_retorno)
-                rr = []
+        if linhas_ida:
+            idx_ida = int(linhas_ida[0])
+            sel = top[idx_ida]
 
-                for item in all_items(d_retorno):
-                    s = summarize(item)
-                    if s:
-                        rr.append({
-                            "Preço total (R$)": s["preco"],
-                            "Data volta": sel["Volta"],
-                            "Origem volta": s["origem"],
-                            "Destino volta": s["destino"],
-                            "Companhia(s) volta": s["cias"],
-                            "Saída volta": data_br(s["saida"]),
-                            "Chegada volta": data_br(s["chegada"]),
-                            "Escalas volta": s["escalas"],
-                            "Duração volta": s["duracao"],
-                            "Voos volta": s["voos"]
-                        })
-
-                if rr:
-                    rdf_retorno = pd.DataFrame(rr)
-                    rdf_retorno["Preço total (R$)"] = pd.to_numeric(
-                        rdf_retorno["Preço total (R$)"],
-                        errors="coerce"
-                    )
-                    st.session_state["retornos"] = rdf_retorno.sort_values(
-                        "Preço total (R$)",
-                        na_position="last"
-                    )
-                else:
-                    st.session_state.pop("retornos", None)
-
-                st.session_state["retorno_sel_key"] = retorno_key
-            except Exception as e:
-                st.warning(f"Não foi possível carregar as opções de volta: {e}")
-
-        if "retornos" in st.session_state:
-            st.markdown("#### Opções de volta")
-            st.dataframe(
-                st.session_state["retornos"],
-                width="stretch",
-                hide_index=True,
-                column_config={
-                    "Preço total (R$)": st.column_config.NumberColumn(format="R$ %.2f")
-                }
+            retorno_key = (
+                f"{sel.get('_token','')}|{sel.get('Ida','')}|"
+                f"{sel.get('Volta','')}|{idx_ida}"
             )
+
+            if st.session_state.get("retorno_sel_key") != retorno_key:
+                p_retorno = dict(sel["_params"])
+                p_retorno["departure_token"] = sel["_token"]
+
+                try:
+                    d_retorno, _ = consulta(p_retorno)
+                    rr = []
+
+                    for item in all_items(d_retorno):
+                        s = summarize(item)
+                        if s:
+                            rr.append({
+                                "Preço total (R$)": s["preco"],
+                                "Data volta": sel["Volta"],
+                                "Origem": s["origem"],
+                                "Destino": s["destino"],
+                                "Companhia(s)": s["cias"],
+                                "Escalas": s["escalas"],
+                                "Duração": s["duracao"],
+                                "Saída": data_br(s["saida"]),
+                                "Chegada": data_br(s["chegada"]),
+                                "Voos": s["voos"]
+                            })
+
+                    if rr:
+                        df_retorno = pd.DataFrame(rr)
+                        df_retorno["Preço total (R$)"] = pd.to_numeric(
+                            df_retorno["Preço total (R$)"],
+                            errors="coerce"
+                        )
+                        st.session_state["retornos"] = df_retorno.sort_values(
+                            ["Preço total (R$)", "Saída"],
+                            na_position="last"
+                        ).reset_index(drop=True)
+                    else:
+                        st.session_state.pop("retornos", None)
+
+                    st.session_state["retorno_sel_key"] = retorno_key
+                    st.session_state["ida_escolhida"] = sel
+
+                except Exception as e:
+                    st.warning(f"Não foi possível carregar as opções de volta: {e}")
+
+            if "retornos" in st.session_state:
+                st.markdown("#### Opções de volta")
+                st.caption("Clique em uma linha para escolher o voo de volta.")
+
+                evento_volta = st.dataframe(
+                    st.session_state["retornos"],
+                    width="stretch",
+                    hide_index=True,
+                    on_select="rerun",
+                    selection_mode="single-row",
+                    key="tabela_voos_volta",
+                    column_config={
+                        "Preço total (R$)": st.column_config.NumberColumn(format="R$ %.2f")
+                    }
+                )
+
+                linhas_volta = list(evento_volta.selection.rows) if evento_volta else []
+                if linhas_volta:
+                    idx_volta = int(linhas_volta[0])
+                    st.session_state["volta_escolhida"] = (
+                        st.session_state["retornos"].iloc[idx_volta].to_dict()
+                    )
+        else:
+            st.caption("Selecione uma opção de ida na tabela para carregar os voos de volta.")
+
     else:
-        st.caption("Pesquisa somente de ida: não há etapa de seleção de retorno.")
+        st.dataframe(
+            df_ida,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Preço (R$)": st.column_config.NumberColumn(format="R$ %.2f")
+            }
+        )
 
 
 
@@ -1519,10 +1541,6 @@ if st.session_state.get("rank"):
         )
 
 
-st.divider()
-st.markdown('<div id="milhas"></div>', unsafe_allow_html=True)
-st.subheader("3. Milhas e programas de fidelidade")
-
 saved = load_saldos()
 
 # Valores padrão para manter compatibilidade com relatório e cálculos posteriores.
@@ -1531,15 +1549,21 @@ smi = int(saved.get("Smiles", 0))
 azu = int(saved.get("Azul Fidelidade", 0))
 rows = []
 status_programas = []
-
-tem_milhas = st.radio(
-    "Você participa de algum programa de milhas ou pontos?",
-    ["Não", "Sim"],
-    horizontal=True,
-    key="tem_programas_milhas"
-)
-
+tem_milhas = "Não"
 programas_escolhidos = []
+
+if rank:
+    st.divider()
+    st.markdown('<div id="milhas"></div>', unsafe_allow_html=True)
+    st.subheader("3. Milhas e programas de fidelidade")
+
+    tem_milhas = st.radio(
+        "Você participa de algum programa de milhas ou pontos?",
+        ["Não", "Sim"],
+        horizontal=True,
+        index=None,
+        key="tem_programas_milhas"
+    )
 
 if tem_milhas == "Sim":
     programas_escolhidos = st.multiselect(
@@ -1653,7 +1677,7 @@ def _secret_float(nome, padrao):
         return float(padrao)
 
 # Dados internos usados pelo ranking. A interface só pede o necessário.
-if tem_milhas == "Sim" and programas_escolhidos and preco_ref > 0:
+if rank and tem_milhas == "Sim" and programas_escolhidos and preco_ref > 0:
     st.subheader("4. Comparar dinheiro × milhas")
     st.caption(
         f"Preço em dinheiro usado como referência: {brl(preco_ref)}. "
@@ -1886,7 +1910,7 @@ rdf = pd.DataFrame(ranking)[[
     "Saldo após emissão"
 ]]
 
-if preco_ref > 0 and (rows or tem_milhas == "Não"):
+if rank and preco_ref > 0 and (rows or tem_milhas in ["Não", "Sim"]):
     st.markdown("### Melhor forma de pagar")
 
     ranking_visual = []
@@ -1992,8 +2016,9 @@ contexto_pdf = {
     "recomendacao": recomendacao_pdf,
 }
 
-st.divider()
-st.markdown('<div id="relatorios"></div>', unsafe_allow_html=True)
+if rank:
+    st.divider()
+    st.markdown('<div id="relatorios"></div>', unsafe_allow_html=True)
 st.markdown("""
 <div style="
     background:#fff;border:1px solid #dfe7f0;border-radius:18px;
