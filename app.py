@@ -1001,6 +1001,9 @@ def _pdf_money(v):
     except Exception:
         return "-"
 
+def _pdf_p(v, style):
+    return Paragraph(_pdf_safe(v), style)
+
 def _pdf_chart_history(df, preco_atual=None):
     if df is None or df.empty:
         return None
@@ -1117,21 +1120,29 @@ def gerar_relatorio_pdf(contexto):
         story.append(Paragraph(f"Menor preço encontrado: <b>{_pdf_money(menor)}</b>", body))
         story.append(Spacer(1, 2*mm))
         cols = ["Preço (R$)","Companhia(s)","Origem","Destino","Saída ida","Chegada ida","Escalas","Duração ida","Voos"]
-        header = ["Preço","Companhia","Orig.","Dest.","Saída","Chegada","Esc.","Duração","Voo(s)"]
+        header = [
+            _pdf_p("Preço", small), _pdf_p("Companhia", small), _pdf_p("Orig.", small),
+            _pdf_p("Dest.", small), _pdf_p("Saída", small), _pdf_p("Chegada", small),
+            _pdf_p("Esc.", small), _pdf_p("Duração", small), _pdf_p("Voo(s)", small)
+        ]
         rows_pdf = [header]
         for x in voos[:12]:
             rows_pdf.append([
-                _pdf_money(x.get("Preço (R$)")),
-                _pdf_safe(x.get("Companhia(s)")),
-                _pdf_safe(x.get("Origem")),
-                _pdf_safe(x.get("Destino")),
-                _pdf_safe(x.get("Saída ida")),
-                _pdf_safe(x.get("Chegada ida")),
-                _pdf_safe(x.get("Escalas")),
-                _pdf_safe(x.get("Duração ida")),
-                _pdf_safe(x.get("Voos")),
+                _pdf_p(_pdf_money(x.get("Preço (R$)")), small),
+                _pdf_p(x.get("Companhia(s)"), small),
+                _pdf_p(x.get("Origem"), small),
+                _pdf_p(x.get("Destino"), small),
+                _pdf_p(x.get("Saída ida"), small),
+                _pdf_p(x.get("Chegada ida"), small),
+                _pdf_p(x.get("Escalas"), small),
+                _pdf_p(x.get("Duração ida"), small),
+                _pdf_p(x.get("Voos"), small),
             ])
-        tab = Table(rows_pdf, repeatRows=1, colWidths=[19*mm,27*mm,12*mm,12*mm,28*mm,28*mm,10*mm,19*mm,24*mm])
+        tab = Table(
+            rows_pdf, repeatRows=1,
+            colWidths=[18*mm,24*mm,11*mm,11*mm,27*mm,27*mm,9*mm,18*mm,27*mm],
+            hAlign="LEFT"
+        )
         tab.setStyle(TableStyle([
             ("BACKGROUND",(0,0),(-1,0),navy),("TEXTCOLOR",(0,0),(-1,0),colors.white),
             ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),
@@ -1143,6 +1154,53 @@ def gerar_relatorio_pdf(contexto):
             ("TOPPADDING",(0,0),(-1,-1),4),("BOTTOMPADDING",(0,0),(-1,-1),4),
         ]))
         story.append(tab)
+
+        retornos_pdf = contexto.get("retornos")
+        if retornos_pdf is not None and isinstance(retornos_pdf, pd.DataFrame) and not retornos_pdf.empty:
+            story.append(Spacer(1, 4*mm))
+            story.append(Paragraph("Opções de volta", h2))
+
+            ret_header = [
+                _pdf_p("Preço total", small), _pdf_p("Data", small),
+                _pdf_p("Orig.", small), _pdf_p("Dest.", small),
+                _pdf_p("Companhia", small), _pdf_p("Saída", small),
+                _pdf_p("Chegada", small), _pdf_p("Esc.", small),
+                _pdf_p("Duração", small), _pdf_p("Voo(s)", small)
+            ]
+            ret_rows = [ret_header]
+            for _, r in retornos_pdf.drop(columns=["_data_principal"], errors="ignore").head(12).iterrows():
+                ret_rows.append([
+                    _pdf_p(_pdf_money(r.get("Preço total (R$)")), small),
+                    _pdf_p(r.get("Data volta"), small),
+                    _pdf_p(r.get("Origem"), small),
+                    _pdf_p(r.get("Destino"), small),
+                    _pdf_p(r.get("Companhia(s)"), small),
+                    _pdf_p(r.get("Saída"), small),
+                    _pdf_p(r.get("Chegada"), small),
+                    _pdf_p(r.get("Escalas"), small),
+                    _pdf_p(r.get("Duração"), small),
+                    _pdf_p(r.get("Voos"), small),
+                ])
+
+            ret_tab = Table(
+                ret_rows, repeatRows=1,
+                colWidths=[18*mm,17*mm,10*mm,10*mm,22*mm,25*mm,25*mm,9*mm,17*mm,27*mm],
+                hAlign="LEFT"
+            )
+            ret_tab.setStyle(TableStyle([
+                ("BACKGROUND",(0,0),(-1,0),navy),
+                ("TEXTCOLOR",(0,0),(-1,0),colors.white),
+                ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),
+                ("GRID",(0,0),(-1,-1),.3,line),
+                ("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white, light]),
+                ("FONTSIZE",(0,0),(-1,-1),5.5),
+                ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
+                ("LEFTPADDING",(0,0),(-1,-1),2),
+                ("RIGHTPADDING",(0,0),(-1,-1),2),
+                ("TOPPADDING",(0,0),(-1,-1),3),
+                ("BOTTOMPADDING",(0,0),(-1,-1),3),
+            ]))
+            story.append(ret_tab)
     else:
         story.append(Paragraph("Nenhuma pesquisa de voo foi executada nesta sessão.", body))
 
@@ -1154,20 +1212,24 @@ def gerar_relatorio_pdf(contexto):
 
         if ida_sel:
             ida_rows = [
-                ["Trecho","Data","Origem","Destino","Companhia","Saída","Chegada","Duração","Voo(s)"],
+                [_pdf_p(x, small) for x in ["Trecho","Data","Origem","Destino","Companhia","Saída","Chegada","Duração","Voo(s)"]],
                 [
-                    "Ida",
-                    _pdf_safe(ida_sel.get("Ida")),
-                    _pdf_safe(ida_sel.get("Origem")),
-                    _pdf_safe(ida_sel.get("Destino")),
-                    _pdf_safe(ida_sel.get("Companhia(s)")),
-                    _pdf_safe(ida_sel.get("Saída ida")),
-                    _pdf_safe(ida_sel.get("Chegada ida")),
-                    _pdf_safe(ida_sel.get("Duração ida")),
-                    _pdf_safe(ida_sel.get("Voos")),
+                    _pdf_p("Ida", small),
+                    _pdf_p(ida_sel.get("Ida"), small),
+                    _pdf_p(ida_sel.get("Origem"), small),
+                    _pdf_p(ida_sel.get("Destino"), small),
+                    _pdf_p(ida_sel.get("Companhia(s)"), small),
+                    _pdf_p(ida_sel.get("Saída ida"), small),
+                    _pdf_p(ida_sel.get("Chegada ida"), small),
+                    _pdf_p(ida_sel.get("Duração ida"), small),
+                    _pdf_p(ida_sel.get("Voos"), small),
                 ]
             ]
-            ida_tab = Table(ida_rows, colWidths=[11*mm,19*mm,12*mm,12*mm,27*mm,27*mm,27*mm,18*mm,22*mm])
+            ida_tab = Table(
+                ida_rows,
+                colWidths=[11*mm,18*mm,11*mm,11*mm,24*mm,27*mm,27*mm,18*mm,25*mm],
+                hAlign="LEFT"
+            )
             ida_tab.setStyle(TableStyle([
                 ("BACKGROUND",(0,0),(-1,0),navy),("TEXTCOLOR",(0,0),(-1,0),colors.white),
                 ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),
@@ -1180,20 +1242,24 @@ def gerar_relatorio_pdf(contexto):
 
         if volta_sel:
             volta_rows = [
-                ["Trecho","Data","Origem","Destino","Companhia","Saída","Chegada","Duração","Voo(s)"],
+                [_pdf_p(x, small) for x in ["Trecho","Data","Origem","Destino","Companhia","Saída","Chegada","Duração","Voo(s)"]],
                 [
-                    "Volta",
-                    _pdf_safe(volta_sel.get("Data volta")),
-                    _pdf_safe(volta_sel.get("Origem")),
-                    _pdf_safe(volta_sel.get("Destino")),
-                    _pdf_safe(volta_sel.get("Companhia(s)")),
-                    _pdf_safe(volta_sel.get("Saída")),
-                    _pdf_safe(volta_sel.get("Chegada")),
-                    _pdf_safe(volta_sel.get("Duração")),
-                    _pdf_safe(volta_sel.get("Voos")),
+                    _pdf_p("Volta", small),
+                    _pdf_p(volta_sel.get("Data volta"), small),
+                    _pdf_p(volta_sel.get("Origem"), small),
+                    _pdf_p(volta_sel.get("Destino"), small),
+                    _pdf_p(volta_sel.get("Companhia(s)"), small),
+                    _pdf_p(volta_sel.get("Saída"), small),
+                    _pdf_p(volta_sel.get("Chegada"), small),
+                    _pdf_p(volta_sel.get("Duração"), small),
+                    _pdf_p(volta_sel.get("Voos"), small),
                 ]
             ]
-            volta_tab = Table(volta_rows, colWidths=[11*mm,19*mm,12*mm,12*mm,27*mm,27*mm,27*mm,18*mm,22*mm])
+            volta_tab = Table(
+                volta_rows,
+                colWidths=[11*mm,18*mm,11*mm,11*mm,24*mm,27*mm,27*mm,18*mm,25*mm],
+                hAlign="LEFT"
+            )
             volta_tab.setStyle(TableStyle([
                 ("BACKGROUND",(0,0),(-1,0),navy),("TEXTCOLOR",(0,0),(-1,0),colors.white),
                 ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),
@@ -1256,28 +1322,25 @@ def gerar_relatorio_pdf(contexto):
 
         comp = contexto.get("ranking_milhas")
         if comp is not None and not comp.empty:
-            headers = list(comp.columns)
-            rows_comp = [headers]
+            headers = ["Posição","Opção","Você paga","Milhas usadas","Milhas faltam","Saldo depois"]
+            rows_comp = [[_pdf_p(h, small) for h in headers]]
             for _, r in comp.iterrows():
-                row = []
-                for c in headers:
-                    v = r[c]
-                    if c in ("Desembolso imediato","Custo econômico"):
-                        row.append(_pdf_money(v))
-                    elif "Milhas" in c or "Saldo" in c:
-                        try: row.append(pts(v))
-                        except: row.append(_pdf_safe(v))
-                    else:
-                        row.append(_pdf_safe(v))
-                rows_comp.append(row)
-            widths = [16*mm,44*mm,34*mm,34*mm,29*mm,29*mm,29*mm][:len(headers)]
-            ct = Table(rows_comp, repeatRows=1, colWidths=widths)
+                rows_comp.append([
+                    _pdf_p(r.get("Posição"), small),
+                    _pdf_p(r.get("Opção"), small),
+                    _pdf_p(_pdf_money(r.get("Desembolso imediato")), small),
+                    _pdf_p("—" if not r.get("Milhas exigidas") else pts(r.get("Milhas exigidas")), small),
+                    _pdf_p("—" if not r.get("Milhas exigidas") else pts(r.get("Milhas faltantes")), small),
+                    _pdf_p("—" if not r.get("Milhas exigidas") else pts(r.get("Saldo após emissão")), small),
+                ])
+            widths = [16*mm,38*mm,30*mm,31*mm,31*mm,31*mm]
+            ct = Table(rows_comp, repeatRows=1, colWidths=widths, hAlign="LEFT")
             ct.setStyle(TableStyle([
                 ("BACKGROUND",(0,0),(-1,0),navy),("TEXTCOLOR",(0,0),(-1,0),colors.white),
                 ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),
                 ("GRID",(0,0),(-1,-1),.3,line),
                 ("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white, light]),
-                ("FONTSIZE",(0,0),(-1,-1),7.2),
+                ("FONTSIZE",(0,0),(-1,-1),6.2),
                 ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
                 ("LEFTPADDING",(0,0),(-1,-1),4),("RIGHTPADDING",(0,0),(-1,-1),4),
                 ("TOPPADDING",(0,0),(-1,-1),5),("BOTTOMPADDING",(0,0),(-1,-1),5),
@@ -1290,20 +1353,29 @@ def gerar_relatorio_pdf(contexto):
         story.append(Spacer(1, 5*mm))
         story.append(Paragraph(titulo_secao("Tabela fixa aplicável"), h2))
         fixa_rows = [
-            ["Programa", fixa.get("programa","-"), "Rota", fixa.get("rota","-")],
-            ["Cabine", fixa.get("cabine","-"), "Milhas por trecho", pts(fixa.get("milhas_trecho",0))],
-            ["Total estimado", pts(fixa.get("total",0)), "Milhas faltantes", pts(fixa.get("faltantes",0))],
-            ["Preço máximo do milheiro", _pdf_money(fixa.get("max_milheiro",0)) + " / 1.000",
-             "Disponibilidade", fixa.get("disponibilidade","-")],
+            [_pdf_p("Programa", body), _pdf_p(fixa.get("programa","-"), body),
+             _pdf_p("Rota", body), _pdf_p(fixa.get("rota","-"), body)],
+            [_pdf_p("Cabine", body), _pdf_p(fixa.get("cabine","-"), body),
+             _pdf_p("Milhas por trecho", body), _pdf_p(pts(fixa.get("milhas_trecho",0)), body)],
+            [_pdf_p("Total estimado", body), _pdf_p(pts(fixa.get("total",0)), body),
+             _pdf_p("Milhas faltantes", body), _pdf_p(pts(fixa.get("faltantes",0)), body)],
+            [_pdf_p("Preço máximo do milheiro", body),
+             _pdf_p(_pdf_money(fixa.get("max_milheiro",0)) + " / 1.000", body),
+             _pdf_p("Disponibilidade", body),
+             _pdf_p(fixa.get("disponibilidade","-"), body)],
         ]
-        ft = Table(fixa_rows, colWidths=[34*mm,56*mm,40*mm,50*mm])
+        ft = Table(
+            fixa_rows,
+            colWidths=[43*mm,47*mm,43*mm,47*mm],
+            hAlign="LEFT"
+        )
         ft.setStyle(TableStyle([
             ("BOX",(0,0),(-1,-1),.5,line),("INNERGRID",(0,0),(-1,-1),.3,line),
             ("ROWBACKGROUNDS",(0,0),(-1,-1),[colors.white, light]),
             ("FONTNAME",(0,0),(0,-1),"Helvetica-Bold"),
             ("FONTNAME",(2,0),(2,-1),"Helvetica-Bold"),
             ("TEXTCOLOR",(0,0),(0,-1),navy),("TEXTCOLOR",(2,0),(2,-1),navy),
-            ("FONTSIZE",(0,0),(-1,-1),8.2),
+            ("FONTSIZE",(0,0),(-1,-1),7.2),
             ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
             ("TOPPADDING",(0,0),(-1,-1),6),("BOTTOMPADDING",(0,0),(-1,-1),6),
         ]))
@@ -1855,11 +1927,26 @@ if rank:
             linhas_volta = list(evento_volta.selection.rows) if evento_volta else []
             if linhas_volta:
                 idx_volta = int(linhas_volta[0])
-                st.session_state["volta_escolhida"] = (
-                    st.session_state["retornos"].iloc[idx_volta].to_dict()
-                )
+                volta_escolhida = st.session_state["retornos"].iloc[idx_volta].to_dict()
+                st.session_state["volta_escolhida"] = volta_escolhida
+
+                # Na resposta de seleção da volta, "Preço total (R$)" representa
+                # o valor final do itinerário completo (ida + volta), e não
+                # somente o trecho de retorno.
+                total_selecionado = float(volta_escolhida.get("Preço total (R$)") or 0)
+                if total_selecionado > 0:
+                    st.session_state["preco_ref"] = total_selecionado
+
+            ida_sel_atual = st.session_state.get("ida_escolhida")
+            volta_sel_atual = st.session_state.get("volta_escolhida")
+            if ida_sel_atual and volta_sel_atual:
+                total_viagem = float(volta_sel_atual.get("Preço total (R$)") or 0)
+                if total_viagem > 0:
+                    st.success(
+                        f"Total da viagem selecionada (ida + volta): **{brl(total_viagem)}**"
+                    )
         else:
-            st.caption("Não foram encontradas opções de volta para a combinação de menor preço.")
+            st.caption("Não foram encontradas opções de volta para as datas pesquisadas.")
     else:
         st.dataframe(
             df_ida,
@@ -2480,6 +2567,7 @@ contexto_pdf = {
     "voos": [{k:v for k,v in x.items() if not k.startswith("_")} for x in rank[:20]] if rank else [],
     "ida_escolhida": st.session_state.get("ida_escolhida"),
     "volta_escolhida": st.session_state.get("volta_escolhida"),
+    "retornos": st.session_state.get("retornos"),
     "preco_atual": float(st.session_state.get("preco_ref",0) or 0),
     "historico": hist_pdf,
     "usar_milhas_pdf": tem_milhas == "Sim",
