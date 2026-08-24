@@ -745,9 +745,8 @@ def agrupar_resultados_aeroportos(resultados):
 
 def campo_aeroporto_inteligente(titulo, key_prefix):
     """
-    Permite vários aeroportos sem manter o menu aberto.
-    O primeiro aeroporto é escolhido normalmente. Depois disso, a lista
-    só volta a aparecer quando o usuário clicar em "Adicionar outro aeroporto".
+    Permite vários aeroportos. Após a escolha, o menu fecha; para incluir
+    outro, o usuário abre explicitamente "Adicionar outro aeroporto".
     """
     prioridade = {
         "GRU": 1, "CGH": 2, "VCP": 3,
@@ -760,33 +759,52 @@ def campo_aeroporto_inteligente(titulo, key_prefix):
         key=lambda a: (prioridade.get(a["codigo"], 9999), a["cidade"], a["codigo"])
     )
 
+    por_codigo = {a["codigo"]: a for a in opcoes}
+
     lista_key = f"{key_prefix}_selecionados"
     input_key = f"{key_prefix}_novo_aeroporto"
 
     if lista_key not in st.session_state:
         st.session_state[lista_key] = []
 
-    selecionados = st.session_state[lista_key]
+    def _normalizar_escolha(valor):
+        if not valor:
+            return None
+        if isinstance(valor, dict):
+            codigo = valor.get("codigo")
+            return por_codigo.get(codigo, valor)
+        if isinstance(valor, str):
+            # O Streamlit pode devolver o código/string serializada no callback.
+            codigo = valor.strip().upper()
+            if codigo in por_codigo:
+                return por_codigo[codigo]
+            # Tenta extrair um código IATA de 3 letras do texto formatado.
+            for cod, aeroporto in por_codigo.items():
+                if f"— {cod}" in valor or valor.endswith(cod) or f" {cod} " in valor:
+                    return aeroporto
+        return None
 
     def _adicionar_aeroporto():
-        escolhido = st.session_state.get(input_key)
+        escolhido = _normalizar_escolha(st.session_state.get(input_key))
         if escolhido:
             cod = escolhido.get("codigo")
-            if cod and all(a.get("codigo") != cod for a in st.session_state[lista_key]):
-                st.session_state[lista_key].append(escolhido)
-        st.session_state[input_key] = None
+            atuais = st.session_state.get(lista_key, [])
+            if cod and all(a.get("codigo") != cod for a in atuais):
+                st.session_state[lista_key] = atuais + [escolhido]
+        # Não força None no callback; isso evita conflito com o estado interno do widget.
 
     def _remover_aeroporto(codigo):
         st.session_state[lista_key] = [
-            a for a in st.session_state[lista_key]
+            a for a in st.session_state.get(lista_key, [])
             if a.get("codigo") != codigo
         ]
 
+    selecionados = st.session_state.get(lista_key, [])
+
     st.markdown(f"**{titulo}**")
 
-    # Primeira escolha: campo pesquisável direto.
     if not selecionados:
-        st.selectbox(
+        escolha = st.selectbox(
             f"Selecionar {titulo.lower()}",
             options=opcoes,
             index=None,
@@ -794,14 +812,20 @@ def campo_aeroporto_inteligente(titulo, key_prefix):
             key=input_key,
             placeholder="Digite a cidade ou aeroporto",
             label_visibility="collapsed",
-            on_change=_adicionar_aeroporto,
             help=(
                 "Digite o nome da cidade ou, se souber, a sigla do aeroporto. "
                 "Ex.: Rio de Janeiro, GIG, São Paulo, CGH, Lima, LIM."
             )
         )
+
+        escolha_norm = _normalizar_escolha(escolha)
+        if escolha_norm:
+            cod = escolha_norm.get("codigo")
+            if cod and all(a.get("codigo") != cod for a in st.session_state.get(lista_key, [])):
+                st.session_state[lista_key] = st.session_state.get(lista_key, []) + [escolha_norm]
+                st.rerun()
+
     else:
-        # Mostra os aeroportos escolhidos sem manter o menu de pesquisa aberto.
         for a in selecionados:
             cidade = a.get("cidade") or ""
             codigo = a.get("codigo") or ""
@@ -822,28 +846,33 @@ def campo_aeroporto_inteligente(titulo, key_prefix):
                     width="stretch"
                 )
 
-        # A lista reaparece somente quando o usuário quiser acrescentar outro.
         with st.popover("＋ Adicionar outro aeroporto", width="stretch"):
-            st.selectbox(
+            restantes = [
+                a for a in opcoes
+                if all(s.get("codigo") != a.get("codigo") for s in selecionados)
+            ]
+            escolha_extra = st.selectbox(
                 "Novo aeroporto",
-                options=[
-                    a for a in opcoes
-                    if all(s.get("codigo") != a.get("codigo") for s in selecionados)
-                ],
+                options=restantes,
                 index=None,
                 format_func=rotulo_aeroporto,
-                key=input_key,
+                key=f"{input_key}_extra_{len(selecionados)}",
                 placeholder="Digite a cidade ou aeroporto",
-                on_change=_adicionar_aeroporto,
-                help=(
-                    "Escolha outro aeroporto para incluir na mesma origem ou destino."
-                )
+                help="Escolha outro aeroporto para incluir na mesma origem ou destino."
             )
 
-    if not st.session_state[lista_key]:
+            escolha_extra_norm = _normalizar_escolha(escolha_extra)
+            if escolha_extra_norm:
+                cod = escolha_extra_norm.get("codigo")
+                if cod and all(a.get("codigo") != cod for a in st.session_state.get(lista_key, [])):
+                    st.session_state[lista_key] = st.session_state.get(lista_key, []) + [escolha_extra_norm]
+                    st.rerun()
+
+    atuais = st.session_state.get(lista_key, [])
+    if not atuais:
         return ""
 
-    return ",".join(a["codigo"] for a in st.session_state[lista_key])
+    return ",".join(a["codigo"] for a in atuais)
 
 
 def _ftt_b64(p):
