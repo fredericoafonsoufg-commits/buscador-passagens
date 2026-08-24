@@ -1126,7 +1126,7 @@ st.markdown("""
   <a href="#historico">Histórico</a>
   <a href="#relatorios">Relatórios</a>
   <div class="grow"></div>
-  <div class="version">V15.4 Web</div>
+  <div class="version">V15.5 Web</div>
   <div class="avatar">FA</div>
 </div>
 """, unsafe_allow_html=True)
@@ -1135,9 +1135,14 @@ with st.sidebar:
     marca_sidebar = BASE / "assets" / "marca_sidebar_aprovada.png"
     if marca_sidebar.exists():
         st.image(str(marca_sidebar), width="stretch")
-    st.markdown("### Nova pesquisa")
-
-    st.caption("Origem, destino e datas em poucos passos.")
+    if st.button("Nova pesquisa", width="stretch", key="nova_pesquisa_btn"):
+        # Limpa todos os dados da pesquisa atual e mantém apenas Adultos = 1.
+        preservar = {"_sessao_ftt_inicializada"}
+        for _k in list(st.session_state.keys()):
+            if _k not in preservar:
+                del st.session_state[_k]
+        st.session_state["adultos"] = 1
+        st.rerun()
 
     orig_txt = campo_aeroporto_inteligente(
         "Origem",
@@ -1166,9 +1171,20 @@ with st.sidebar:
     )
 
     if tipo_viagem == "Ida e volta":
+        # Ao escolher a ida, a volta começa no mesmo período da viagem.
+        # Se a ida mudar, reposiciona a data de volta para o dia seguinte.
+        if ida0:
+            volta_sugerida = ida0 + timedelta(days=1)
+            if (
+                "data_volta" not in st.session_state
+                or st.session_state.get("_ida_usada_na_volta") != ida0
+            ):
+                st.session_state["data_volta"] = volta_sugerida
+                st.session_state["_ida_usada_na_volta"] = ida0
+
         volta0 = st.date_input(
             "Data da volta",
-            value=None,
+            value=st.session_state.get("data_volta", None),
             min_value=ida0 if ida0 else date.today(),
             format="DD/MM/YYYY",
             key="data_volta"
@@ -1184,7 +1200,8 @@ with st.sidebar:
     adultos = st.selectbox(
         "Adultos",
         list(range(1, 10)),
-        index=0
+        index=0,
+        key="adultos"
     )
 
     if True:
@@ -1498,10 +1515,9 @@ if st.session_state.get("rank"):
         graf = graf.set_index("Data")
         graf["Preço atual"] = preco_atual_hist
         grafico_historico_google_style(graf.reset_index(), preco_atual_hist)
-        st.caption(
-            f"Faixa de preços no período: menor {brl(analise['minimo'])} · "
-            f"maior {brl(analise['maximo'])}"
-        )
+        faixa_min = brl(analise["minimo"]).replace("$", r"\$")
+        faixa_max = brl(analise["maximo"]).replace("$", r"\$")
+        st.caption(f"Faixa de preços no período: menor {faixa_min} · maior {faixa_max}")
 
     elif preco_atual_hist > 0 and not hist_local.empty:
         st.caption("Histórico de preços atualizado.")
@@ -1530,9 +1546,9 @@ if st.session_state.get("rank"):
 
         h["Preço atual"] = preco_atual_hist
         grafico_historico_google_style(h.reset_index(), preco_atual_hist)
-        st.caption(
-            f"Faixa de preços no período: menor {brl(minimo)} · maior {brl(maximo)}"
-        )
+        faixa_min = brl(minimo).replace("$", r"\$")
+        faixa_max = brl(maximo).replace("$", r"\$")
+        st.caption(f"Faixa de preços no período: menor {faixa_min} · maior {faixa_max}")
 
     else:
         st.info(
@@ -1937,18 +1953,60 @@ if rank and preco_ref > 0 and (rows or tem_milhas in ["Não", "Sim"]):
         st.success(f"Melhor opção: pagar em dinheiro — {brl(preco_ref)}.")
     else:
         economia_caixa = max(preco_ref - melhor["Desembolso imediato"], 0)
+        milhas_usadas = int(melhor["Milhas exigidas"] or 0)
+        valor_por_1000 = (
+            economia_caixa / milhas_usadas * 1000
+            if milhas_usadas > 0 else 0
+        )
+
+        # Referência econômica interna usada pelo ranking.
+        if "Smiles" in melhor["Opção"]:
+            referencia_1000 = _secret_float("SMILES_OWN_VALUE_PER_1000", 15.0)
+        elif "LATAM" in melhor["Opção"]:
+            referencia_1000 = _secret_float("LATAM_OWN_VALUE_PER_1000", 15.0)
+        elif "Azul" in melhor["Opção"]:
+            referencia_1000 = _secret_float("AZUL_OWN_VALUE_PER_1000", 15.0)
+        else:
+            referencia_1000 = 15.0
+
+        valor_economico_milhas = milhas_usadas / 1000 * referencia_1000
+        vantagem_economica = economia_caixa - valor_economico_milhas
+
         st.success(
             f"Melhor opção: {melhor['Opção']}. "
             f"Você paga {brl(melhor['Desembolso imediato'])} e usa "
-            f"{pts(melhor['Milhas exigidas'])} milhas/pontos. "
-            f"Economia em dinheiro frente à passagem: {brl(economia_caixa)}."
+            f"{pts(milhas_usadas)} milhas/pontos."
         )
+
+        a1, a2, a3 = st.columns(3)
+        a1.metric("Economia em dinheiro", brl(economia_caixa))
+        a2.metric("Valor obtido por 1.000 milhas", brl(valor_por_1000))
+        a3.metric(
+            "Vantagem econômica estimada",
+            brl(vantagem_economica)
+        )
+
+        if valor_por_1000 > referencia_1000:
+            st.caption(
+                f"Bom uso das milhas: neste resgate, cada 1.000 milhas geram cerca de "
+                f"{brl(valor_por_1000)}, acima da referência de {brl(referencia_1000)} por 1.000. "
+                f"Considerando o valor econômico das milhas usadas, a vantagem estimada é "
+                f"{brl(vantagem_economica)}."
+            )
+        else:
+            st.caption(
+                f"Este resgate economiza dinheiro no momento, mas entrega cerca de "
+                f"{brl(valor_por_1000)} por 1.000 milhas, abaixo da referência de "
+                f"{brl(referencia_1000)} por 1.000. Pagar em dinheiro pode preservar melhor "
+                f"o valor das suas milhas."
+            )
 elif preco_ref <= 0:
     rdf = pd.DataFrame(ranking)
 st.divider()
-st.caption(
-    "Preços, disponibilidade e regras dos programas de fidelidade devem ser confirmados antes da compra ou emissão."
-)
+if rank:
+    st.caption(
+        "Preços, disponibilidade e regras dos programas de fidelidade devem ser confirmados antes da compra ou emissão."
+    )
 
 
 # -----------------------------------------------------------
@@ -2019,41 +2077,37 @@ contexto_pdf = {
 if rank:
     st.divider()
     st.markdown('<div id="relatorios"></div>', unsafe_allow_html=True)
-st.markdown("""
-<div style="
-    background:#fff;border:1px solid #dfe7f0;border-radius:18px;
-    padding:18px 20px;margin-top:10px;box-shadow:0 5px 18px rgba(8,34,74,.04);
-">
-  <div style="font-size:1.05rem;font-weight:800;color:#08224a;">Relatório completo em PDF</div>
-  <div style="color:#718096;margin-top:4px;">
-    Baixe um relatório completo com voos, gráficos, tabelas, comparação de milhas e recomendação final.
-  </div>
-</div>
-""", unsafe_allow_html=True)
-st.caption(
-    "Baixe um PDF organizado com a marca Frederico Travel Tools, dados da viagem, "
-    "resultados de voos, histórico de preços, gráfico, saldos, comparador de milhas, "
-    "tabela fixa aplicável e recomendação."
-)
+    st.markdown("""
+    <div style="
+        background:#fff;border:1px solid #dfe7f0;border-radius:18px;
+        padding:18px 20px;margin-top:10px;box-shadow:0 5px 18px rgba(8,34,74,.04);
+    ">
+      <div style="font-size:1.05rem;font-weight:800;color:#08224a;">Relatório completo em PDF</div>
+      <div style="color:#718096;margin-top:4px;">
+        Baixe um relatório completo com voos, gráficos, tabelas, comparação de milhas e recomendação final.
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+    st.caption(
+        "Baixe um PDF organizado com a marca Frederico Travel Tools, dados da viagem, "
+        "resultados de voos, histórico de preços, gráfico, saldos, comparador de milhas, "
+        "tabela fixa aplicável e recomendação."
+    )
 
-if rank:
-    try:
-        pdf_bytes = gerar_relatorio_pdf(contexto_pdf)
-        nome_pdf = f"Frederico_Travel_Tools_{'-'.join(orig) or 'origem'}_{'-'.join(dest) or 'destino'}_{ida0.strftime('%d-%m-%Y')}.pdf"
-        st.download_button(
-            "⬇️ Baixar relatório completo em PDF",
-            data=pdf_bytes,
-            file_name=nome_pdf,
-            mime="application/pdf",
-            type="primary",
-            width="stretch"
-        )
-    except Exception as e:
-        st.warning(f"Não foi possível gerar o PDF nesta sessão: {e}")
-else:
-    st.info("Faça uma pesquisa primeiro. O botão de PDF será liberado após os resultados.")
-
-
+    if rank:
+        try:
+            pdf_bytes = gerar_relatorio_pdf(contexto_pdf)
+            nome_pdf = f"Frederico_Travel_Tools_{'-'.join(orig) or 'origem'}_{'-'.join(dest) or 'destino'}_{ida0.strftime('%d-%m-%Y')}.pdf"
+            st.download_button(
+                "⬇️ Baixar relatório completo em PDF",
+                data=pdf_bytes,
+                file_name=nome_pdf,
+                mime="application/pdf",
+                type="primary",
+                width="stretch"
+            )
+        except Exception as e:
+            st.warning(f"Não foi possível gerar o PDF nesta sessão: {e}")
 st.markdown("""
 <div class="fttFooter">
 Desenvolvido por Frederico Afonso Farias · © 2026 · Dados via SerpApi · Tenha uma excelente busca!
