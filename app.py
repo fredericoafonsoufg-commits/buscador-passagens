@@ -1195,7 +1195,7 @@ st.markdown("""
   <a href="#historico">Histórico</a>
   <a href="#relatorios">Relatórios</a>
   <div class="grow"></div>
-  <div class="version">V15.6 Web</div>
+  <div class="version">V15.7 Web</div>
   <div class="avatar">FA</div>
 </div>
 """, unsafe_allow_html=True)
@@ -1205,10 +1205,49 @@ with st.sidebar:
     if marca_sidebar.exists():
         st.image(str(marca_sidebar), width="stretch")
     def _limpar_nova_pesquisa():
-        preservar = {"_sessao_ftt_inicializada"}
+        # Limpa somente os dados da consulta atual.
+        # Mantém autenticação, saldos salvos e demais preferências da sessão.
+        chaves_pesquisa = [
+            "origem_aeroportos",
+            "destino_aeroportos",
+            "tipo_viagem",
+            "data_ida",
+            "data_volta",
+            "_ida_usada_na_volta",
+            "flex_ida",
+            "flex_volta",
+            "cabine",
+            "conexoes",
+            "rank",
+            "uso",
+            "retornos",
+            "preco_ref",
+            "ultima_pesquisa",
+            "price_insights_raw",
+            "_ultimo_ponto_salvo",
+            "retorno_sel_key",
+            "ida_escolhida",
+            "volta_escolhida",
+            "tabela_voos_ida",
+            "tabela_voos_volta",
+            "voo_ida_selecionado",
+            "periodo_historico",
+            "tem_programas_milhas"
+        ]
+        for _k in chaves_pesquisa:
+            st.session_state.pop(_k, None)
+
+        # Remove também chaves dinâmicas de simulação da consulta atual.
         for _k in list(st.session_state.keys()):
-            if _k not in preservar:
-                del st.session_state[_k]
+            if (
+                _k.startswith("req_v15_")
+                or _k.startswith("tax_v15_")
+                or _k.startswith("buy_v15_")
+                or _k.startswith("fixed_buy_")
+                or _k.startswith("cabine_fixa_")
+            ):
+                st.session_state.pop(_k, None)
+
         st.session_state["adultos"] = 1
 
     st.button(
@@ -1260,9 +1299,9 @@ with st.sidebar:
     else:
         volta0 = None
 
-    fi = st.selectbox("Flexibilidade da ida", [0,1,2,3,5,7], index=None, placeholder="Selecione")
+    fi = st.selectbox("Flexibilidade da ida", [0,1,2,3,5,7], index=None, placeholder="Selecione", key="flex_ida")
     if tipo_viagem == "Ida e volta":
-        fv = st.selectbox("Flexibilidade da volta", [0,1,2,3,5,7], index=None, placeholder="Selecione")
+        fv = st.selectbox("Flexibilidade da volta", [0,1,2,3,5,7], index=None, placeholder="Selecione", key="flex_volta")
     else:
         fv = 0
     adultos = st.selectbox(
@@ -1277,7 +1316,8 @@ with st.sidebar:
             "Cabine",
             ["Econômica", "Premium Economy", "Executiva", "Primeira"],
             index=None,
-            placeholder="Selecione"
+            placeholder="Selecione",
+            key="cabine"
         )
         cab = {
             "Econômica": 1,
@@ -1290,7 +1330,8 @@ with st.sidebar:
             "Conexões",
             ["Qualquer quantidade", "Somente direto", "Até 1 conexão", "Até 2 conexões"],
             index=None,
-            placeholder="Selecione"
+            placeholder="Selecione",
+            key="conexoes"
         )
         stops = {
             "Qualquer quantidade": 0,
