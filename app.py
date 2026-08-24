@@ -1173,10 +1173,10 @@ def gerar_relatorio_pdf(contexto):
         cols = ["Preço (R$)","Companhia(s)","Origem","Destino","Saída ida","Chegada ida","Escalas","Duração ida","Voos"]
         mapa_pdf_ida = contexto.get("mapa_so_ida") or {}
         header = [
-            _pdf_p("Só ida", small), _pdf_p("Total ida+volta", small),
-            _pdf_p("Companhia", small), _pdf_p("Orig.", small),
-            _pdf_p("Dest.", small), _pdf_p("Saída", small), _pdf_p("Chegada", small),
-            _pdf_p("Esc.", small), _pdf_p("Duração", small), _pdf_p("Voo(s)", small)
+            _pdf_p("Data ida", small), _pdf_p("Orig.", small), _pdf_p("Dest.", small),
+            _pdf_p("Companhia", small), _pdf_p("Esc.", small), _pdf_p("Duração", small),
+            _pdf_p("Saída", small), _pdf_p("Chegada", small), _pdf_p("Voo(s)", small),
+            _pdf_p("Só ida", small), _pdf_p("Total ida+volta", small)
         ]
         rows_pdf = [header]
         for x in voos[:12]:
@@ -1184,20 +1184,21 @@ def gerar_relatorio_pdf(contexto):
                 mapa_pdf_ida, x.get("Ida"), x.get("Origem"), x.get("Destino"), x.get("Voos")
             )
             rows_pdf.append([
-                _pdf_p(_pdf_money(preco_so_ida_pdf) if preco_so_ida_pdf is not None else "—", small),
-                _pdf_p(_pdf_money(x.get("Preço (R$)")), small),
-                _pdf_p(x.get("Companhia(s)"), small),
+                _pdf_p(x.get("Ida"), small),
                 _pdf_p(x.get("Origem"), small),
                 _pdf_p(x.get("Destino"), small),
-                _pdf_p(x.get("Saída ida"), small),
-                _pdf_p(x.get("Chegada ida"), small),
+                _pdf_p(x.get("Companhia(s)"), small),
                 _pdf_p(x.get("Escalas"), small),
                 _pdf_p(x.get("Duração ida"), small),
+                _pdf_p(x.get("Saída ida"), small),
+                _pdf_p(x.get("Chegada ida"), small),
                 _pdf_p(x.get("Voos"), small),
+                _pdf_p(_pdf_money(preco_so_ida_pdf) if preco_so_ida_pdf is not None else "—", small),
+                _pdf_p(_pdf_money(x.get("Preço (R$)")), small),
             ])
         tab = Table(
             rows_pdf, repeatRows=1,
-            colWidths=[16*mm,20*mm,21*mm,10*mm,10*mm,24*mm,24*mm,8*mm,17*mm,26*mm],
+            colWidths=[16*mm,9*mm,9*mm,19*mm,8*mm,16*mm,22*mm,22*mm,22*mm,16*mm,19*mm],
             hAlign="LEFT"
         )
         tab.setStyle(TableStyle([
@@ -1233,11 +1234,10 @@ def gerar_relatorio_pdf(contexto):
             )
 
             ret_header = [
-                _pdf_p("Só volta", small), _pdf_p("Total ida+volta", small),
-                _pdf_p("Data", small), _pdf_p("Orig.", small), _pdf_p("Dest.", small),
-                _pdf_p("Companhia", small), _pdf_p("Saída", small),
-                _pdf_p("Chegada", small), _pdf_p("Esc.", small),
-                _pdf_p("Duração", small), _pdf_p("Voo(s)", small)
+                _pdf_p("Data volta", small), _pdf_p("Orig.", small), _pdf_p("Dest.", small),
+                _pdf_p("Companhia", small), _pdf_p("Esc.", small), _pdf_p("Duração", small),
+                _pdf_p("Saída", small), _pdf_p("Chegada", small), _pdf_p("Voo(s)", small),
+                _pdf_p("Só volta", small), _pdf_p("Total ida+volta", small)
             ]
             ret_rows = [ret_header]
             for _, r in retornos_pdf.drop(columns=["_data_principal"], errors="ignore").head(12).iterrows():
@@ -1246,22 +1246,22 @@ def gerar_relatorio_pdf(contexto):
                     r.get("Destino"), r.get("Voos")
                 )
                 ret_rows.append([
-                    _pdf_p(_pdf_money(preco_so_volta_pdf) if preco_so_volta_pdf is not None else "—", small),
-                    _pdf_p(_pdf_money(r.get("Preço total (R$)")), small),
                     _pdf_p(r.get("Data volta"), small),
                     _pdf_p(r.get("Origem"), small),
                     _pdf_p(r.get("Destino"), small),
                     _pdf_p(r.get("Companhia(s)"), small),
-                    _pdf_p(r.get("Saída"), small),
-                    _pdf_p(r.get("Chegada"), small),
                     _pdf_p(r.get("Escalas"), small),
                     _pdf_p(r.get("Duração"), small),
+                    _pdf_p(r.get("Saída"), small),
+                    _pdf_p(r.get("Chegada"), small),
                     _pdf_p(r.get("Voos"), small),
+                    _pdf_p(_pdf_money(preco_so_volta_pdf) if preco_so_volta_pdf is not None else "—", small),
+                    _pdf_p(_pdf_money(r.get("Preço total (R$)")), small),
                 ])
 
             ret_tab = Table(
                 ret_rows, repeatRows=1,
-                colWidths=[15*mm,19*mm,16*mm,9*mm,9*mm,20*mm,23*mm,23*mm,8*mm,16*mm,24*mm],
+                colWidths=[16*mm,9*mm,9*mm,19*mm,8*mm,16*mm,22*mm,22*mm,22*mm,16*mm,19*mm],
                 hAlign="LEFT"
             )
             ret_tab.setStyle(TableStyle([
@@ -2045,10 +2045,19 @@ if rank:
                 axis=1
             )
 
-            # Mantém o preço total da combinação e mostra também o trecho avulso.
+            # Mantém o mesmo padrão visual da tabela de ida:
+            # dados do voo primeiro e preços individuais/total nas duas últimas colunas.
             df_volta_visivel = df_volta_visivel.rename(
                 columns={"Preço total (R$)": "Total ida + volta (R$)"}
             )
+            ordem_volta = [
+                "Data volta", "Origem", "Destino", "Companhia(s)", "Escalas",
+                "Duração", "Saída", "Chegada", "Voos",
+                "Só volta (R$)", "Total ida + volta (R$)"
+            ]
+            df_volta_visivel = df_volta_visivel[
+                [c for c in ordem_volta if c in df_volta_visivel.columns]
+            ]
 
             evento_volta = st.dataframe(
                 df_volta_visivel,
