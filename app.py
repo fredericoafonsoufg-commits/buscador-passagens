@@ -29,7 +29,7 @@ from reportlab.platypus import (
 
 st.set_page_config(
     page_title="Frederico Travel Tools",
-    page_icon="🌐",
+    page_icon="✈️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -488,18 +488,102 @@ def exigir_senha():
     if st.session_state.get("autenticado"):
         return
 
-    st.subheader("Buscador Inteligente de Passagens")
-    st.caption("Acesso privado")
+    # Tela de acesso exclusiva, sem sidebar e sem elementos técnicos.
+    st.html("""
+    <style>
+    [data-testid="stSidebar"] {display:none !important;}
+    [data-testid="stSidebarCollapsedControl"] {display:none !important;}
+    header[data-testid="stHeader"] {display:none !important;}
+    [data-testid="stToolbar"] {display:none !important;}
+    [data-testid="stMainMenu"] {display:none !important;}
+    [data-testid="stMainBlockContainer"] {
+        max-width:100% !important;
+        padding-top:5vh !important;
+        padding-bottom:2rem !important;
+    }
+    .ftt-login-title{
+        text-align:center;
+        color:#08224A;
+        font-size:2rem;
+        line-height:1.1;
+        font-weight:800;
+        letter-spacing:-.03em;
+        margin:.2rem 0 .4rem 0;
+    }
+    .ftt-login-sub{
+        text-align:center;
+        color:#6B7A90;
+        font-size:1rem;
+        margin-bottom:.2rem;
+    }
+    .ftt-login-secure{
+        text-align:center;
+        color:#8A98AA;
+        font-size:.82rem;
+        margin-top:.15rem;
+        margin-bottom:1.2rem;
+    }
+    div[data-testid="stForm"]{
+        background:#FFFFFF;
+        border:1px solid #DFE7F0;
+        border-radius:20px;
+        padding:1.35rem 1.45rem 1.1rem 1.45rem;
+        box-shadow:0 14px 40px rgba(8,34,74,.08);
+    }
+    div[data-testid="stForm"] button{
+        width:100% !important;
+        background:#087CF0 !important;
+        color:#FFFFFF !important;
+        border:1px solid #087CF0 !important;
+        min-height:46px !important;
+        border-radius:12px !important;
+        font-weight:700 !important;
+    }
+    div[data-testid="stForm"] button:hover{
+        background:#0668CC !important;
+        border-color:#0668CC !important;
+        color:#FFFFFF !important;
+    }
+    </style>
+    """)
 
-    senha_digitada = st.text_input("Senha", type="password")
-    entrar = st.button("Entrar", type="primary")
+    _, centro, _ = st.columns([1, 1.05, 1])
 
-    if entrar:
-        if hmac.compare_digest(senha_digitada, senha_configurada):
-            st.session_state["autenticado"] = True
-            st.rerun()
-        else:
-            st.error("Senha incorreta.")
+    with centro:
+        logo_login = BASE / "assets" / "frederico_travel_tools_logo.png"
+        if not logo_login.exists():
+            logo_login = BASE / "assets" / "marca_sidebar_aprovada.png"
+
+        if logo_login.exists():
+            st.image(str(logo_login), width="stretch")
+
+        st.markdown(
+            '<div class="ftt-login-title">Frederico Travel Tools</div>',
+            unsafe_allow_html=True
+        )
+        st.markdown(
+            '<div class="ftt-login-sub">Planeje, compare e viaje melhor.</div>',
+            unsafe_allow_html=True
+        )
+        st.markdown(
+            '<div class="ftt-login-secure">Acesso protegido</div>',
+            unsafe_allow_html=True
+        )
+
+        with st.form("login_ftt", clear_on_submit=False):
+            senha_digitada = st.text_input(
+                "Senha",
+                type="password",
+                placeholder="Digite sua senha"
+            )
+            entrar = st.form_submit_button("Entrar")
+
+        if entrar:
+            if hmac.compare_digest(senha_digitada, senha_configurada):
+                st.session_state["autenticado"] = True
+                st.rerun()
+            else:
+                st.error("Senha incorreta. Tente novamente.")
 
     st.stop()
 
