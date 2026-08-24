@@ -15,6 +15,7 @@ import streamlit as st
 import base64
 from io import BytesIO
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
 from reportlab.lib.pagesizes import A4, landscape
@@ -851,6 +852,11 @@ def _pdf_chart_history(df, preco_atual=None):
     ax.set_ylabel("Preço (R$)")
     ax.grid(axis="y", alpha=.20)
     ax.spines[["top","right"]].set_visible(False)
+
+    locator = mdates.AutoDateLocator(minticks=4, maxticks=8)
+    ax.xaxis.set_major_locator(locator)
+    ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
+    ax.tick_params(axis="x", labelsize=8)
     fig.autofmt_xdate(rotation=0)
     fig.tight_layout()
     buf = BytesIO()
@@ -885,6 +891,12 @@ def gerar_relatorio_pdf(contexto):
     small = ParagraphStyle("FTTSmall", parent=body, fontSize=7.4, leading=9, textColor=gray)
     center = ParagraphStyle("FTTCenter", parent=body, alignment=TA_CENTER)
     story = []
+    secao = [0]
+
+    def titulo_secao(titulo):
+        secao[0] += 1
+        return f"{secao[0]}. {titulo}"
+
 
     logo_file = BASE / "assets" / "frederico_travel_tools_logo.png"
     if logo_file.exists():
@@ -899,7 +911,7 @@ def gerar_relatorio_pdf(contexto):
     story.append(Spacer(1, 4*mm))
 
     # Resumo da pesquisa
-    story.append(Paragraph("1. Resumo da pesquisa", h2))
+    story.append(Paragraph(titulo_secao("Resumo da pesquisa"), h2))
     dados = [
         ["Origem", contexto.get("origem","-"), "Destino", contexto.get("destino","-")],
         ["Tipo", contexto.get("tipo","-"), "Cabine", contexto.get("cabine","-")],
@@ -925,7 +937,7 @@ def gerar_relatorio_pdf(contexto):
 
     # Resultados de voos
     voos = contexto.get("voos") or []
-    story.append(Paragraph("2. Resultados em dinheiro", h2))
+    story.append(Paragraph(titulo_secao("Resultados em dinheiro"), h2))
     if voos:
         menor = min(float(x.get("Preço (R$)", 0) or 0) for x in voos)
         story.append(Paragraph(f"Menor preço encontrado: <b>{_pdf_money(menor)}</b>", body))
@@ -960,9 +972,66 @@ def gerar_relatorio_pdf(contexto):
     else:
         story.append(Paragraph("Nenhuma pesquisa de voo foi executada nesta sessão.", body))
 
+    ida_sel = contexto.get("ida_escolhida")
+    volta_sel = contexto.get("volta_escolhida")
+    if ida_sel or volta_sel:
+        story.append(Spacer(1, 5*mm))
+        story.append(Paragraph("Voos selecionados", h2))
+
+        if ida_sel:
+            ida_rows = [
+                ["Trecho","Data","Origem","Destino","Companhia","Saída","Chegada","Duração","Voo(s)"],
+                [
+                    "Ida",
+                    _pdf_safe(ida_sel.get("Ida")),
+                    _pdf_safe(ida_sel.get("Origem")),
+                    _pdf_safe(ida_sel.get("Destino")),
+                    _pdf_safe(ida_sel.get("Companhia(s)")),
+                    _pdf_safe(ida_sel.get("Saída ida")),
+                    _pdf_safe(ida_sel.get("Chegada ida")),
+                    _pdf_safe(ida_sel.get("Duração ida")),
+                    _pdf_safe(ida_sel.get("Voos")),
+                ]
+            ]
+            ida_tab = Table(ida_rows, colWidths=[13*mm,22*mm,15*mm,15*mm,35*mm,33*mm,33*mm,22*mm,28*mm])
+            ida_tab.setStyle(TableStyle([
+                ("BACKGROUND",(0,0),(-1,0),navy),("TEXTCOLOR",(0,0),(-1,0),colors.white),
+                ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),
+                ("GRID",(0,0),(-1,-1),.3,line),
+                ("FONTSIZE",(0,0),(-1,-1),7.2),
+                ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
+            ]))
+            story.append(ida_tab)
+            story.append(Spacer(1, 3*mm))
+
+        if volta_sel:
+            volta_rows = [
+                ["Trecho","Data","Origem","Destino","Companhia","Saída","Chegada","Duração","Voo(s)"],
+                [
+                    "Volta",
+                    _pdf_safe(volta_sel.get("Data volta")),
+                    _pdf_safe(volta_sel.get("Origem")),
+                    _pdf_safe(volta_sel.get("Destino")),
+                    _pdf_safe(volta_sel.get("Companhia(s)")),
+                    _pdf_safe(volta_sel.get("Saída")),
+                    _pdf_safe(volta_sel.get("Chegada")),
+                    _pdf_safe(volta_sel.get("Duração")),
+                    _pdf_safe(volta_sel.get("Voos")),
+                ]
+            ]
+            volta_tab = Table(volta_rows, colWidths=[13*mm,22*mm,15*mm,15*mm,35*mm,33*mm,33*mm,22*mm,28*mm])
+            volta_tab.setStyle(TableStyle([
+                ("BACKGROUND",(0,0),(-1,0),navy),("TEXTCOLOR",(0,0),(-1,0),colors.white),
+                ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),
+                ("GRID",(0,0),(-1,-1),.3,line),
+                ("FONTSIZE",(0,0),(-1,-1),7.2),
+                ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
+            ]))
+            story.append(volta_tab)
+
     # Histórico
     story.append(PageBreak())
-    story.append(Paragraph("3. Histórico de preços", h2))
+    story.append(Paragraph(titulo_secao("Histórico de preços"), h2))
     hist = contexto.get("historico")
     if hist is not None and not hist.empty:
         chart = _pdf_chart_history(hist, contexto.get("preco_atual"))
@@ -996,7 +1065,7 @@ def gerar_relatorio_pdf(contexto):
 
     # Milhas e comparador
     story.append(Spacer(1, 5*mm))
-    story.append(Paragraph("4. Saldos e comparação com milhas", h2))
+    story.append(Paragraph(titulo_secao("Saldos e comparação com milhas"), h2))
     saldos = contexto.get("saldos", {})
     saldo_tbl = Table([
         ["LATAM Pass","Smiles","Azul Fidelidade"],
@@ -1045,7 +1114,7 @@ def gerar_relatorio_pdf(contexto):
     fixa = contexto.get("tabela_fixa")
     if fixa:
         story.append(Spacer(1, 5*mm))
-        story.append(Paragraph("5. Tabela fixa aplicável", h2))
+        story.append(Paragraph(titulo_secao("Tabela fixa aplicável"), h2))
         fixa_rows = [
             ["Programa", fixa.get("programa","-"), "Rota", fixa.get("rota","-")],
             ["Cabine", fixa.get("cabine","-"), "Milhas por trecho", pts(fixa.get("milhas_trecho",0))],
@@ -1070,7 +1139,7 @@ def gerar_relatorio_pdf(contexto):
     rec = contexto.get("recomendacao")
     if rec:
         story.append(Spacer(1, 5*mm))
-        story.append(Paragraph("6. Recomendação", h2))
+        story.append(Paragraph(titulo_secao("Recomendação"), h2))
         story.append(Table([[Paragraph(_pdf_safe(rec), body)]], colWidths=[230*mm],
                            style=TableStyle([
                                ("BACKGROUND",(0,0),(-1,-1),colors.HexColor("#EAF7EE")),
@@ -1126,7 +1195,7 @@ st.markdown("""
   <a href="#historico">Histórico</a>
   <a href="#relatorios">Relatórios</a>
   <div class="grow"></div>
-  <div class="version">V15.5 Web</div>
+  <div class="version">V15.6 Web</div>
   <div class="avatar">FA</div>
 </div>
 """, unsafe_allow_html=True)
@@ -1135,14 +1204,19 @@ with st.sidebar:
     marca_sidebar = BASE / "assets" / "marca_sidebar_aprovada.png"
     if marca_sidebar.exists():
         st.image(str(marca_sidebar), width="stretch")
-    if st.button("Nova pesquisa", width="stretch", key="nova_pesquisa_btn"):
-        # Limpa todos os dados da pesquisa atual e mantém apenas Adultos = 1.
+    def _limpar_nova_pesquisa():
         preservar = {"_sessao_ftt_inicializada"}
         for _k in list(st.session_state.keys()):
             if _k not in preservar:
                 del st.session_state[_k]
         st.session_state["adultos"] = 1
-        st.rerun()
+
+    st.button(
+        "Nova pesquisa",
+        width="stretch",
+        key="nova_pesquisa_btn",
+        on_click=_limpar_nova_pesquisa
+    )
 
     orig_txt = campo_aeroporto_inteligente(
         "Origem",
@@ -1171,20 +1245,14 @@ with st.sidebar:
     )
 
     if tipo_viagem == "Ida e volta":
-        # Ao escolher a ida, a volta começa no mesmo período da viagem.
-        # Se a ida mudar, reposiciona a data de volta para o dia seguinte.
-        if ida0:
-            volta_sugerida = ida0 + timedelta(days=1)
-            if (
-                "data_volta" not in st.session_state
-                or st.session_state.get("_ida_usada_na_volta") != ida0
-            ):
-                st.session_state["data_volta"] = volta_sugerida
-                st.session_state["_ida_usada_na_volta"] = ida0
+        volta_sugerida = (ida0 + timedelta(days=1)) if ida0 else None
+        if ida0 and st.session_state.get("_ida_usada_na_volta") != ida0:
+            st.session_state["data_volta"] = volta_sugerida
+            st.session_state["_ida_usada_na_volta"] = ida0
 
         volta0 = st.date_input(
             "Data da volta",
-            value=st.session_state.get("data_volta", None),
+            value=st.session_state.get("data_volta", volta_sugerida),
             min_value=ida0 if ida0 else date.today(),
             format="DD/MM/YYYY",
             key="data_volta"
@@ -2066,6 +2134,8 @@ contexto_pdf = {
     "adultos": int(adultos) if adultos else "-",
     "conexoes": stop_pt,
     "voos": [{k:v for k,v in x.items() if not k.startswith("_")} for x in rank[:20]] if rank else [],
+    "ida_escolhida": st.session_state.get("ida_escolhida"),
+    "volta_escolhida": st.session_state.get("volta_escolhida"),
     "preco_atual": float(st.session_state.get("preco_ref",0) or 0),
     "historico": hist_pdf,
     "saldos": {"LATAM Pass": lat, "Smiles": smi, "Azul Fidelidade": azu},
