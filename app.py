@@ -499,7 +499,7 @@ def exigir_senha():
     [data-testid="stMainMenu"] {display:none !important;}
     [data-testid="stMainBlockContainer"] {
         max-width:100% !important;
-        padding-top:5vh !important;
+        padding-top:3vh !important;
         padding-bottom:2rem !important;
     }
     .ftt-login-title{
@@ -557,19 +557,6 @@ def exigir_senha():
 
         if logo_login.exists():
             st.image(str(logo_login), width="stretch")
-
-        st.markdown(
-            '<div class="ftt-login-title">Frederico Travel Tools</div>',
-            unsafe_allow_html=True
-        )
-        st.markdown(
-            '<div class="ftt-login-sub">Planeje, compare e viaje melhor.</div>',
-            unsafe_allow_html=True
-        )
-        st.markdown(
-            '<div class="ftt-login-secure">Acesso protegido</div>',
-            unsafe_allow_html=True
-        )
 
         with st.form("login_ftt", clear_on_submit=False):
             senha_digitada = st.text_input(
@@ -1770,61 +1757,91 @@ if rank:
                     else top[0]
                 )
 
+        datas_volta_busca = [
+            d for d in flex(volta0, fv)
+            if d > datetime.strptime(sel_retorno["Ida"], "%d/%m/%Y").date()
+        ]
+
         retorno_key = (
             f"{sel_retorno.get('_token','')}|{sel_retorno.get('Ida','')}|"
-            f"{sel_retorno.get('Volta','')}"
+            f"{','.join(d.isoformat() for d in datas_volta_busca)}"
         )
 
         if st.session_state.get("retorno_sel_key") != retorno_key:
-            p_retorno = dict(sel_retorno["_params"])
-            p_retorno["departure_token"] = sel_retorno["_token"]
+            rr = []
 
-            try:
-                d_retorno, _ = consulta(p_retorno)
-                rr = []
+            def _buscar_retorno_data(data_retorno):
+                p_ret = dict(sel_retorno["_params"])
+                p_ret["departure_token"] = sel_retorno["_token"]
+                p_ret["return_date"] = data_retorno.isoformat()
+                try:
+                    d_ret, _ = consulta(p_ret)
+                    return data_retorno, d_ret, None
+                except Exception as exc:
+                    return data_retorno, None, exc
 
-                for item in all_items(d_retorno):
-                    s = summarize(item)
-                    if s:
-                        rr.append({
-                            "Preço total (R$)": s["preco"],
-                            "Data volta": sel_retorno["Volta"],
-                            "Origem": s["origem"],
-                            "Destino": s["destino"],
-                            "Companhia(s)": s["cias"],
-                            "Escalas": s["escalas"],
-                            "Duração": s["duracao"],
-                            "Saída": data_br(s["saida"]),
-                            "Chegada": data_br(s["chegada"]),
-                            "Voos": s["voos"]
-                        })
+            with ThreadPoolExecutor(max_workers=min(4, max(1, len(datas_volta_busca)))) as executor:
+                futuros_ret = [
+                    executor.submit(_buscar_retorno_data, d)
+                    for d in datas_volta_busca
+                ]
 
-                if rr:
-                    df_retorno = pd.DataFrame(rr)
-                    df_retorno["Preço total (R$)"] = pd.to_numeric(
-                        df_retorno["Preço total (R$)"],
-                        errors="coerce"
-                    )
-                    st.session_state["retornos"] = df_retorno.sort_values(
-                        ["Preço total (R$)", "Saída"],
-                        na_position="last"
-                    ).reset_index(drop=True)
-                else:
-                    st.session_state.pop("retornos", None)
+                for futuro in as_completed(futuros_ret):
+                    data_retorno, d_retorno, erro_retorno = futuro.result()
+                    if erro_retorno is not None or not d_retorno:
+                        continue
 
-                st.session_state["retorno_sel_key"] = retorno_key
+                    for item in all_items(d_retorno):
+                        s = summarize(item)
+                        if s:
+                            rr.append({
+                                "Preço total (R$)": s["preco"],
+                                "Data volta": data_br(data_retorno),
+                                "Origem": s["origem"],
+                                "Destino": s["destino"],
+                                "Companhia(s)": s["cias"],
+                                "Escalas": s["escalas"],
+                                "Duração": s["duracao"],
+                                "Saída": data_br(s["saida"]),
+                                "Chegada": data_br(s["chegada"]),
+                                "Voos": s["voos"],
+                                "_data_principal": data_retorno == volta0
+                            })
 
-            except Exception:
+            if rr:
+                df_retorno = pd.DataFrame(rr)
+                df_retorno["Preço total (R$)"] = pd.to_numeric(
+                    df_retorno["Preço total (R$)"],
+                    errors="coerce"
+                )
+                df_retorno = df_retorno.sort_values(
+                    ["Preço total (R$)", "Data volta", "Saída"],
+                    na_position="last"
+                ).reset_index(drop=True)
+                st.session_state["retornos"] = df_retorno
+            else:
                 st.session_state.pop("retornos", None)
+
+            st.session_state["retorno_sel_key"] = retorno_key
 
         st.markdown("#### Opções de volta")
         if "retornos" in st.session_state and not st.session_state["retornos"].empty:
-            st.caption(
-                f"Opções para a data de volta escolhida: {data_br(volta0)}. "
-                "Clique em uma linha apenas se quiser marcar a volta preferida."
+            if fv:
+                datas_txt = ", ".join(data_br(d) for d in flex(volta0, fv))
+                st.caption(
+                    f"Datas pesquisadas para a volta: {datas_txt}. "
+                    f"A data principal é {data_br(volta0)}."
+                )
+            else:
+                st.caption(f"Data da volta: {data_br(volta0)}.")
+
+            df_volta_visivel = st.session_state["retornos"].drop(
+                columns=["_data_principal"],
+                errors="ignore"
             )
+
             evento_volta = st.dataframe(
-                st.session_state["retornos"],
+                df_volta_visivel,
                 width="stretch",
                 hide_index=True,
                 on_select="rerun",
