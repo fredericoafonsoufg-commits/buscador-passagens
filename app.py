@@ -336,16 +336,36 @@ def summarize(x):
         "token": x.get("departure_token", "")
     }
 
+def _hora_voo(valor):
+    txt = str(valor or "").strip()
+    # Aceita "29/01/2027 11:45" e também "2027-01-29 11:45".
+    if " " in txt:
+        return txt.rsplit(" ", 1)[-1][:5]
+    return txt[:5]
+
+
+def _normaliza_voos(valor):
+    return " / ".join(
+        p.strip().upper().replace("  ", " ")
+        for p in str(valor or "").split("/")
+        if p.strip()
+    )
+
+
 def mapa_precos_so_trecho(origens, destinos, datas, adultos, cabine, stops):
     """
-    Consulta tarifas avulsas (somente ida) e devolve um mapa por
-    data/origem/destino/voos. Estes valores são comparativos e NÃO são uma
-    decomposição do preço de uma passagem ida e volta.
+    Consulta tarifas avulsas (somente ida).
+    Guarda chaves alternativas para conseguir identificar o mesmo voo mesmo
+    quando o Google Flights muda a forma de escrever o número do voo.
     """
     datas = sorted(set(d for d in datas if d))
     mapa = {}
     if not datas:
         return mapa
+
+    def _grava(chave, preco):
+        if chave not in mapa or preco < mapa[chave]:
+            mapa[chave] = preco
 
     def _consulta_data(data_voo):
         p = params_base(origens, destinos, data_voo, None, int(adultos), cabine, stops)
@@ -365,26 +385,61 @@ def mapa_precos_so_trecho(origens, destinos, datas, adultos, cabine, stops):
                 s = summarize(item)
                 if not s or not isinstance(s.get("preco"), (int, float)):
                     continue
-                chave = (
-                    data_br(data_voo),
-                    str(s.get("origem") or ""),
-                    str(s.get("destino") or ""),
-                    str(s.get("voos") or "")
-                )
+
+                data_txt = data_br(data_voo)
+                origem = str(s.get("origem") or "")
+                destino = str(s.get("destino") or "")
+                voos = _normaliza_voos(s.get("voos"))
+                cia = str(s.get("cias") or "").strip().upper()
+                hora = _hora_voo(s.get("saida"))
+                duracao = str(s.get("duracao") or "").strip()
                 preco = float(s["preco"])
-                if chave not in mapa or preco < mapa[chave]:
-                    mapa[chave] = preco
+
+                # 1) correspondência exata pelo(s) número(s) do voo.
+                if voos:
+                    _grava(("voos", data_txt, origem, destino, voos), preco)
+
+                # 2) fallback forte: data + rota + companhia + horário + duração.
+                if hora:
+                    _grava(("hora_cia_dur", data_txt, origem, destino, hora, cia, duracao), preco)
+                    _grava(("hora_cia", data_txt, origem, destino, hora, cia), preco)
+                    _grava(("hora", data_txt, origem, destino, hora), preco)
+
+                # 3) fallback final: menor tarifa avulsa daquela rota/data.
+                _grava(("rota_data", data_txt, origem, destino), preco)
+
     return mapa
 
 
-def preco_so_trecho(mapa, data_txt, origem, destino, voos):
-    chave = (
-        str(data_txt or ""),
-        str(origem or ""),
-        str(destino or ""),
-        str(voos or "")
-    )
-    return mapa.get(chave)
+def preco_so_trecho(
+    mapa, data_txt, origem, destino, voos,
+    companhia=None, saida=None, duracao=None
+):
+    data_txt = str(data_txt or "")
+    origem = str(origem or "")
+    destino = str(destino or "")
+    voos_norm = _normaliza_voos(voos)
+    cia = str(companhia or "").strip().upper()
+    hora = _hora_voo(saida)
+    duracao = str(duracao or "").strip()
+
+    chaves = []
+    if voos_norm:
+        chaves.append(("voos", data_txt, origem, destino, voos_norm))
+    if hora:
+        chaves.extend([
+            ("hora_cia_dur", data_txt, origem, destino, hora, cia, duracao),
+            ("hora_cia", data_txt, origem, destino, hora, cia),
+            ("hora", data_txt, origem, destino, hora),
+        ])
+
+    for chave in chaves:
+        if chave in mapa:
+            return mapa[chave]
+
+    # Se o voo exato não existir na pesquisa avulsa, usa a menor tarifa
+    # disponível para a mesma rota e data, evitando células vazias.
+    return mapa.get(("rota_data", data_txt, origem, destino))
 
 
 def flex(d, n):
@@ -1181,7 +1236,8 @@ def gerar_relatorio_pdf(contexto):
         rows_pdf = [header]
         for x in voos[:12]:
             preco_so_ida_pdf = preco_so_trecho(
-                mapa_pdf_ida, x.get("Ida"), x.get("Origem"), x.get("Destino"), x.get("Voos")
+                mapa_pdf_ida, x.get("Ida"), x.get("Origem"), x.get("Destino"), x.get("Voos"),
+                x.get("Companhia(s)"), x.get("Saída ida"), x.get("Duração ida")
             )
             rows_pdf.append([
                 _pdf_p(x.get("Ida"), small),
@@ -1243,7 +1299,8 @@ def gerar_relatorio_pdf(contexto):
             for _, r in retornos_pdf.drop(columns=["_data_principal"], errors="ignore").head(12).iterrows():
                 preco_so_volta_pdf = preco_so_trecho(
                     mapa_pdf_volta, r.get("Data volta"), r.get("Origem"),
-                    r.get("Destino"), r.get("Voos")
+                    r.get("Destino"), r.get("Voos"),
+                    r.get("Companhia(s)"), r.get("Saída"), r.get("Duração")
                 )
                 ret_rows.append([
                     _pdf_p(r.get("Data volta"), small),
@@ -1867,7 +1924,8 @@ if rank:
         if volta0:
             preco_avulso_ida = preco_so_trecho(
                 mapa_so_ida, x.get("Ida"), x.get("Origem"),
-                x.get("Destino"), x.get("Voos")
+                x.get("Destino"), x.get("Voos"),
+                x.get("Companhia(s)"), x.get("Saída ida"), x.get("Duração ida")
             )
             linha["Só ida (R$)"] = preco_avulso_ida
             # O preço original do Google Flights em pesquisa ida e volta
@@ -2012,7 +2070,7 @@ if rank:
                 st.caption(
                     f"Datas pesquisadas para a volta: {datas_txt}. "
                     f"A data principal é {data_br(volta0)}. "
-                    "“Só volta” é a tarifa avulsa pesquisada separadamente."
+                    "“Só volta” é a tarifa avulsa pesquisada separadamente para a mesma data e rota."
                 )
             else:
                 st.caption(f"Data da volta: {data_br(volta0)}.")
@@ -2040,7 +2098,8 @@ if rank:
                     r.get("Data volta"),
                     r.get("Origem"),
                     r.get("Destino"),
-                    r.get("Voos")
+                    r.get("Voos"),
+                    r.get("Companhia(s)"), r.get("Saída"), r.get("Duração")
                 ),
                 axis=1
             )
