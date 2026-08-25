@@ -254,7 +254,7 @@ def cache_key(params):
     raw = json.dumps(safe, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(raw.encode()).hexdigest()
 
-CACHE_TTL_MINUTOS = 30
+CACHE_TTL_MINUTOS = 24 * 60
 
 def consulta(params):
     """
@@ -274,20 +274,21 @@ def consulta(params):
             cache_antigo = None
 
     ultimo_erro = None
-    esperas = [0, 2, 5]
+    esperas = [0, 1]
 
     for tentativa, espera in enumerate(esperas, 1):
         if espera:
             time.sleep(espera)
 
         try:
-            r = requests.get(SERPAPI_URL, params=params, timeout=(15, 70))
+            r = requests.get(SERPAPI_URL, params=params, timeout=(8, 30))
 
             if r.status_code == 429:
-                ultimo_erro = RuntimeError(
-                    "Limite temporário de consultas atingido na SerpApi."
+                # Não repetir 429: uma nova tentativa só gastaria tempo e
+                # não recuperaria uma cota já atingida.
+                raise RuntimeError(
+                    "Limite de consultas atingido na SerpApi."
                 )
-                continue
 
             if 500 <= r.status_code <= 599:
                 ultimo_erro = RuntimeError(
@@ -321,6 +322,9 @@ def consulta(params):
                     raise RuntimeError(erro_api)
 
                 # Alguns erros do Google Flights são transitórios.
+                if "limit" in erro_lower or "quota" in erro_lower or "rate" in erro_lower:
+                    raise RuntimeError("Limite de consultas atingido na SerpApi.")
+
                 if any(x in erro_lower for x in [
                     "temporar", "timeout", "timed out", "try again",
                     "unavailable", "failed", "internal"
@@ -1359,21 +1363,7 @@ def gerar_relatorio_pdf(contexto):
         if retornos_pdf is not None and isinstance(retornos_pdf, pd.DataFrame) and not retornos_pdf.empty:
             story.append(Spacer(1, 4*mm))
             story.append(Paragraph("Opções de volta", h2))
-
-            datas_ret_pdf = []
-            for d_txt in retornos_pdf["Data volta"].dropna().unique():
-                try:
-                    datas_ret_pdf.append(datetime.strptime(str(d_txt), "%d/%m/%Y").date())
-                except Exception:
-                    pass
-            mapa_pdf_volta = mapa_precos_so_trecho(
-                contexto.get("dest_codigos", []),
-                contexto.get("orig_codigos", []),
-                datas_ret_pdf,
-                contexto.get("adultos", 1),
-                contexto.get("cabine_codigo", 1),
-                contexto.get("stops_codigo", 0)
-            )
+            mapa_pdf_volta = {}
 
             ret_header = [
                 _pdf_p("Data volta", small), _pdf_p("Orig.", small), _pdf_p("Dest.", small),
@@ -1868,7 +1858,27 @@ comb = []
 if ida0 and fi is not None and adultos and cab is not None and stops is not None:
     if tipo_viagem == "Ida e volta":
         if volta0 and fv is not None:
-            comb = [(i, v) for i in flex(ida0, fi) for v in flex(volta0, fv) if v > i]
+            # Modo econômico:
+            # 1) combinação principal;
+            # 2) datas flexíveis da ida mantendo a volta principal;
+            # 3) datas flexíveis da volta mantendo a ida principal.
+            # Evita o produto cartesiano (ex.: ±7 x ±7 = centenas de chamadas).
+            comb = [(ida0, volta0)]
+
+            for i in flex(ida0, fi):
+                if i != ida0 and volta0 > i:
+                    comb.append((i, volta0))
+
+            for v in flex(volta0, fv):
+                if v != volta0 and v > ida0:
+                    comb.append((ida0, v))
+
+            # Remove duplicidades preservando a prioridade.
+            _vistos_comb = set()
+            comb = [
+                par for par in comb
+                if not (par in _vistos_comb or _vistos_comb.add(par))
+            ]
     elif tipo_viagem == "Só ida":
         comb = [(i, None) for i in flex(ida0, fi)]
 
@@ -1909,11 +1919,16 @@ if st.button(
 
     for _k in [
         "retornos", "retorno_sel_key", "ida_escolhida", "volta_escolhida",
-        "_erros_retorno", "_datas_sem_token_retorno"
+        "_erros_retorno", "_datas_sem_token_retorno",
+        "_chave_precos_avulsos", "_preco_so_ida_sel", "_preco_so_volta_sel"
     ]:
         st.session_state.pop(_k, None)
     rows = []
     novas = reap = 0
+    status_busca = st.empty()
+    status_busca.info(
+        f"Pesquisando {len(comb)} combinação(ões) priorizadas de datas..."
+    )
     prog = st.progress(0)
     erros_reais = []
 
@@ -1926,7 +1941,7 @@ if st.button(
         except Exception as exc:
             return ida, volta, p, None, False, exc
 
-    max_workers = min(6, max(1, len(comb)))
+    max_workers = min(9, max(1, len(comb)))
     concluidas = 0
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -1936,6 +1951,9 @@ if st.button(
             ida, volta, p, d, cached, erro = futuro.result()
             concluidas += 1
             prog.progress(concluidas / len(comb))
+            status_busca.info(
+                f"Pesquisando voos... {concluidas} de {len(comb)} combinação(ões) concluída(s)."
+            )
 
             if erro is not None:
                 msg = str(erro)
@@ -1970,6 +1988,7 @@ if st.button(
                     })
 
     prog.empty()
+    status_busca.empty()
 
     pesquisa_ok = bool(rows)
 
@@ -2050,33 +2069,15 @@ if rank:
 
     top = rank[:20]
 
-    # Preço avulso de cada voo de ida. É uma pesquisa "somente ida",
-    # não uma divisão do valor total da passagem ida e volta.
+    # Modo econômico: não consulta automaticamente uma nova pesquisa
+    # "somente ida" para cada rota/data da tabela. Isso preserva a cota.
     mapa_so_ida = {}
-    if volta0:
-        datas_ida_exibidas = []
-        for x in top:
-            try:
-                datas_ida_exibidas.append(datetime.strptime(x["Ida"], "%d/%m/%Y").date())
-            except Exception:
-                pass
-        mapa_so_ida = mapa_precos_so_trecho(
-            orig, dest, datas_ida_exibidas, adultos, cab, stops
-        )
 
     linhas_ida_tabela = []
     for x in top:
         linha = {k: v for k, v in x.items() if not k.startswith("_")}
         if volta0:
-            preco_avulso_ida = preco_so_trecho(
-                mapa_so_ida, x.get("Ida"), x.get("Origem"),
-                x.get("Destino"), x.get("Voos"),
-                x.get("Companhia(s)"), x.get("Saída ida"), x.get("Duração ida")
-            )
-            linha["Só ida (R$)"] = preco_avulso_ida if preco_avulso_ida is not None else float("nan")
-            # O preço original do Google Flights em pesquisa ida e volta
-            # representa o itinerário completo.
-            linha["Total ida + volta (R$)"] = linha.pop("Preço (R$)")
+            linha["Comprando ida e volta juntas (R$)"] = linha.pop("Preço (R$)")
         linhas_ida_tabela.append(linha)
 
     df_ida = pd.DataFrame(linhas_ida_tabela)
@@ -2084,8 +2085,9 @@ if rank:
     if volta0:
         st.markdown("#### Opções de ida")
         st.caption(
-            "“Só ida” é o preço avulso daquele voo pesquisado separadamente. "
-            "“Total ida + volta” é o preço do itinerário completo."
+            "Os valores exibidos são do itinerário completo. "
+            "O preço avulso de cada trecho é consultado somente após você selecionar os voos, "
+            "para economizar consultas."
         )
 
         evento_ida = st.dataframe(
@@ -2096,8 +2098,7 @@ if rank:
             selection_mode="single-row",
             key="tabela_voos_ida",
             column_config={
-                "Só ida (R$)": st.column_config.NumberColumn(format="R$ %.2f"),
-                "Total ida + volta (R$)": st.column_config.NumberColumn(format="R$ %.2f")
+                "Comprando ida e volta juntas (R$)": st.column_config.NumberColumn(format="R$ %.2f")
             }
         )
 
@@ -2269,49 +2270,23 @@ if rank:
                 st.caption(
                     f"Datas pesquisadas para a volta: {datas_txt}. "
                     f"A data principal é {data_br(volta0)}. "
-                    "“Só volta” é a tarifa avulsa pesquisada separadamente para a mesma data e rota."
+                    "Os preços avulsos dos trechos são consultados apenas depois da seleção."
                 )
             else:
                 st.caption(f"Data da volta: {data_br(volta0)}.")
-
-            # Consulta o valor avulso (somente volta) para os voos exibidos.
-            datas_retorno_exibidas = []
-            for d_txt in st.session_state["retornos"]["Data volta"].dropna().unique():
-                try:
-                    datas_retorno_exibidas.append(datetime.strptime(str(d_txt), "%d/%m/%Y").date())
-                except Exception:
-                    pass
-
-            mapa_so_volta = mapa_precos_so_trecho(
-                dest, orig, datas_retorno_exibidas, adultos, cab, stops
-            )
 
             df_volta_visivel = st.session_state["retornos"].drop(
                 columns=["_data_principal"],
                 errors="ignore"
             ).copy()
 
-            df_volta_visivel["Só volta (R$)"] = df_volta_visivel.apply(
-                lambda r: preco_so_trecho(
-                    mapa_so_volta,
-                    r.get("Data volta"),
-                    r.get("Origem"),
-                    r.get("Destino"),
-                    r.get("Voos"),
-                    r.get("Companhia(s)"), r.get("Saída"), r.get("Duração")
-                ),
-                axis=1
-            )
-
-            # Mantém o mesmo padrão visual da tabela de ida:
-            # dados do voo primeiro e preços individuais/total nas duas últimas colunas.
             df_volta_visivel = df_volta_visivel.rename(
-                columns={"Preço total (R$)": "Total ida + volta (R$)"}
+                columns={"Preço total (R$)": "Comprando ida e volta juntas (R$)"}
             )
             ordem_volta = [
                 "Data volta", "Origem", "Destino", "Companhia(s)", "Escalas",
                 "Duração", "Saída", "Chegada", "Voos",
-                "Só volta (R$)", "Total ida + volta (R$)"
+                "Comprando ida e volta juntas (R$)"
             ]
             df_volta_visivel = df_volta_visivel[
                 [c for c in ordem_volta if c in df_volta_visivel.columns]
@@ -2325,8 +2300,7 @@ if rank:
                 selection_mode="single-row",
                 key="tabela_voos_volta",
                 column_config={
-                    "Só volta (R$)": st.column_config.NumberColumn(format="R$ %.2f"),
-                    "Total ida + volta (R$)": st.column_config.NumberColumn(format="R$ %.2f")
+                    "Comprando ida e volta juntas (R$)": st.column_config.NumberColumn(format="R$ %.2f")
                 }
             )
 
@@ -2347,9 +2321,99 @@ if rank:
             volta_sel_atual = st.session_state.get("volta_escolhida")
             if ida_sel_atual and volta_sel_atual:
                 total_viagem = float(volta_sel_atual.get("Preço total (R$)") or 0)
+
+                chave_avulsa = (
+                    ida_sel_atual.get("Ida"), ida_sel_atual.get("Origem"),
+                    ida_sel_atual.get("Destino"), ida_sel_atual.get("Voos"),
+                    volta_sel_atual.get("Data volta"), volta_sel_atual.get("Origem"),
+                    volta_sel_atual.get("Destino"), volta_sel_atual.get("Voos")
+                )
+
+                if st.session_state.get("_chave_precos_avulsos") != chave_avulsa:
+                    preco_so_ida_sel = None
+                    preco_so_volta_sel = None
+
+                    try:
+                        data_ida_sel = datetime.strptime(
+                            ida_sel_atual.get("Ida"), "%d/%m/%Y"
+                        ).date()
+                        mapa_ida_sel = mapa_precos_so_trecho(
+                            [ida_sel_atual.get("Origem")],
+                            [ida_sel_atual.get("Destino")],
+                            [data_ida_sel], adultos, cab, stops
+                        )
+                        preco_so_ida_sel = preco_so_trecho(
+                            mapa_ida_sel,
+                            ida_sel_atual.get("Ida"),
+                            ida_sel_atual.get("Origem"),
+                            ida_sel_atual.get("Destino"),
+                            ida_sel_atual.get("Voos"),
+                            ida_sel_atual.get("Companhia(s)"),
+                            ida_sel_atual.get("Saída ida"),
+                            ida_sel_atual.get("Duração ida")
+                        )
+                    except Exception:
+                        pass
+
+                    try:
+                        data_volta_sel = datetime.strptime(
+                            volta_sel_atual.get("Data volta"), "%d/%m/%Y"
+                        ).date()
+                        mapa_volta_sel = mapa_precos_so_trecho(
+                            [volta_sel_atual.get("Origem")],
+                            [volta_sel_atual.get("Destino")],
+                            [data_volta_sel], adultos, cab, stops
+                        )
+                        preco_so_volta_sel = preco_so_trecho(
+                            mapa_volta_sel,
+                            volta_sel_atual.get("Data volta"),
+                            volta_sel_atual.get("Origem"),
+                            volta_sel_atual.get("Destino"),
+                            volta_sel_atual.get("Voos"),
+                            volta_sel_atual.get("Companhia(s)"),
+                            volta_sel_atual.get("Saída"),
+                            volta_sel_atual.get("Duração")
+                        )
+                    except Exception:
+                        pass
+
+                    st.session_state["_preco_so_ida_sel"] = preco_so_ida_sel
+                    st.session_state["_preco_so_volta_sel"] = preco_so_volta_sel
+                    st.session_state["_chave_precos_avulsos"] = chave_avulsa
+
+                preco_so_ida_sel = st.session_state.get("_preco_so_ida_sel")
+                preco_so_volta_sel = st.session_state.get("_preco_so_volta_sel")
+
                 if total_viagem > 0:
                     st.success(
-                        f"Total da viagem selecionada (ida + volta): **{brl(total_viagem)}**"
+                        f"Comprando ida e volta juntas: **{brl(total_viagem)}**"
+                    )
+
+                if preco_so_ida_sel is not None and preco_so_volta_sel is not None:
+                    total_separado = float(preco_so_ida_sel) + float(preco_so_volta_sel)
+                    diferenca = abs(total_separado - total_viagem)
+
+                    cpre1, cpre2, cpre3 = st.columns(3)
+                    cpre1.metric("Só ida", brl(preco_so_ida_sel))
+                    cpre2.metric("Só volta", brl(preco_so_volta_sel))
+                    cpre3.metric("Separadamente", brl(total_separado))
+
+                    if total_viagem <= total_separado:
+                        st.info(
+                            f"Melhor escolha: comprar ida e volta juntas por {brl(total_viagem)}. "
+                            f"Separadamente custariam {brl(total_separado)}. "
+                            f"Economia: {brl(diferenca)}."
+                        )
+                    else:
+                        st.info(
+                            f"Melhor escolha: comprar os trechos separadamente por {brl(total_separado)}. "
+                            f"Juntos custariam {brl(total_viagem)}. "
+                            f"Economia: {brl(diferenca)}."
+                        )
+                else:
+                    st.caption(
+                        "O total da viagem foi encontrado. Os preços avulsos não puderam ser "
+                        "consultados sem consumir novas chamadas."
                     )
         else:
             erros_ret = st.session_state.get("_erros_retorno", [])
@@ -3021,6 +3085,8 @@ contexto_pdf = {
     "retornos": st.session_state.get("retornos"),
     "mapa_so_ida": mapa_so_ida if "mapa_so_ida" in locals() else {},
     "preco_atual": float(st.session_state.get("preco_ref",0) or 0),
+    "preco_so_ida_sel": st.session_state.get("_preco_so_ida_sel"),
+    "preco_so_volta_sel": st.session_state.get("_preco_so_volta_sel"),
     "historico": hist_pdf,
     "usar_milhas_pdf": tem_milhas == "Sim",
     "saldos": {"LATAM Pass": lat, "Smiles": smi, "Azul Fidelidade": azu} if tem_milhas == "Sim" else {},
