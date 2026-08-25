@@ -30,7 +30,7 @@ from reportlab.platypus import (
 
 st.set_page_config(
     page_title="Frederico Travel Tools",
-    page_icon=✈️",
+    page_icon=":airplane:",
     layout="wide",
     initial_sidebar_state="expanded"
 )
