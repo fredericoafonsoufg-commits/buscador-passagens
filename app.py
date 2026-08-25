@@ -1,4 +1,4 @@
-
+ 
 import os, json, hashlib, statistics, hmac, time
 from urllib.parse import quote
 from datetime import date, timedelta, datetime
@@ -30,7 +30,7 @@ from reportlab.platypus import (
 
 st.set_page_config(
     page_title="Frederico Travel Tools",
-    page_icon="✈️",
+    page_icon=✈️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -438,18 +438,33 @@ def mapa_precos_so_trecho(origens, destinos, datas, adultos, cabine, stops):
         if chave not in mapa or preco < mapa[chave]:
             mapa[chave] = preco
 
-    def _consulta_data(data_voo):
-        p = params_base(origens, destinos, data_voo, None, int(adultos), cabine, stops)
+    pares = [
+        (o, d)
+        for o in origens
+        for d in destinos
+        if o and d and o != d
+    ]
+
+    def _consulta_data_rota(data_voo, origem_exata, destino_exato):
+        p = params_base(
+            [origem_exata], [destino_exato],
+            data_voo, None, int(adultos), cabine, stops
+        )
         try:
             d, _ = consulta(p)
-            return data_voo, d
+            return data_voo, origem_exata, destino_exato, d
         except Exception:
-            return data_voo, None
+            return data_voo, origem_exata, destino_exato, None
 
-    with ThreadPoolExecutor(max_workers=min(4, len(datas))) as executor:
-        futuros = [executor.submit(_consulta_data, d) for d in datas]
+    total_jobs = max(1, len(datas) * len(pares))
+    with ThreadPoolExecutor(max_workers=min(6, total_jobs)) as executor:
+        futuros = [
+            executor.submit(_consulta_data_rota, data_voo, origem_exata, destino_exato)
+            for data_voo in datas
+            for origem_exata, destino_exato in pares
+        ]
         for futuro in as_completed(futuros):
-            data_voo, dados = futuro.result()
+            data_voo, origem_exata, destino_exato, dados = futuro.result()
             if not dados:
                 continue
             for item in all_items(dados):
@@ -1892,7 +1907,10 @@ if st.button(
     assinatura_anterior = st.session_state.get("_assinatura_ultima_pesquisa_valida")
     rank_anterior = st.session_state.get("rank", []) if assinatura_anterior == assinatura_atual else []
 
-    for _k in ["retornos", "retorno_sel_key", "ida_escolhida", "volta_escolhida"]:
+    for _k in [
+        "retornos", "retorno_sel_key", "ida_escolhida", "volta_escolhida",
+        "_erros_retorno", "_datas_sem_token_retorno"
+    ]:
         st.session_state.pop(_k, None)
     rows = []
     novas = reap = 0
@@ -2055,7 +2073,7 @@ if rank:
                 x.get("Destino"), x.get("Voos"),
                 x.get("Companhia(s)"), x.get("Saída ida"), x.get("Duração ida")
             )
-            linha["Só ida (R$)"] = preco_avulso_ida
+            linha["Só ida (R$)"] = preco_avulso_ida if preco_avulso_ida is not None else float("nan")
             # O preço original do Google Flights em pesquisa ida e volta
             # representa o itinerário completo.
             linha["Total ida + volta (R$)"] = linha.pop("Preço (R$)")
@@ -2136,11 +2154,56 @@ if rank:
 
         if st.session_state.get("retorno_sel_key") != retorno_key:
             rr = []
+            erros_retorno = []
+            datas_sem_token = []
+
+            def _candidato_ida_para_data(data_retorno):
+                data_txt = data_br(data_retorno)
+
+                # O departure_token só é válido para a mesma combinação de
+                # datas em que foi gerado. Procuramos o MESMO voo de ida
+                # dentro da combinação correspondente à data de volta.
+                mesmos_voos = [
+                    x for x in rank
+                    if x.get("Volta") == data_txt
+                    and x.get("Origem") == sel_retorno.get("Origem")
+                    and x.get("Destino") == sel_retorno.get("Destino")
+                    and x.get("Voos") == sel_retorno.get("Voos")
+                    and x.get("Saída ida") == sel_retorno.get("Saída ida")
+                ]
+
+                if mesmos_voos:
+                    return sorted(
+                        mesmos_voos,
+                        key=lambda x: (x["Preço (R$)"], x["Escalas"])
+                    )[0]
+
+                # Fallback: mesmo voo identificado por horário/companhia,
+                # caso a numeração venha escrita de maneira diferente.
+                mesma_saida = [
+                    x for x in rank
+                    if x.get("Volta") == data_txt
+                    and x.get("Origem") == sel_retorno.get("Origem")
+                    and x.get("Destino") == sel_retorno.get("Destino")
+                    and x.get("Saída ida") == sel_retorno.get("Saída ida")
+                    and x.get("Companhia(s)") == sel_retorno.get("Companhia(s)")
+                ]
+                if mesma_saida:
+                    return sorted(
+                        mesma_saida,
+                        key=lambda x: (x["Preço (R$)"], x["Escalas"])
+                    )[0]
+
+                return None
 
             def _buscar_retorno_data(data_retorno):
-                p_ret = dict(sel_retorno["_params"])
-                p_ret["departure_token"] = sel_retorno["_token"]
-                p_ret["return_date"] = data_retorno.isoformat()
+                candidato_data = _candidato_ida_para_data(data_retorno)
+                if not candidato_data:
+                    return data_retorno, None, "sem_token_compativel"
+
+                p_ret = dict(candidato_data["_params"])
+                p_ret["departure_token"] = candidato_data["_token"]
+
                 try:
                     d_ret, _ = consulta(p_ret)
                     return data_retorno, d_ret, None
@@ -2155,7 +2218,13 @@ if rank:
 
                 for futuro in as_completed(futuros_ret):
                     data_retorno, d_retorno, erro_retorno = futuro.result()
-                    if erro_retorno is not None or not d_retorno:
+                    if erro_retorno == "sem_token_compativel":
+                        datas_sem_token.append(data_retorno)
+                        continue
+                    if erro_retorno is not None:
+                        erros_retorno.append(str(erro_retorno))
+                        continue
+                    if not d_retorno:
                         continue
 
                     for item in all_items(d_retorno):
@@ -2190,6 +2259,8 @@ if rank:
                 st.session_state.pop("retornos", None)
 
             st.session_state["retorno_sel_key"] = retorno_key
+            st.session_state["_erros_retorno"] = erros_retorno
+            st.session_state["_datas_sem_token_retorno"] = datas_sem_token
 
         st.markdown("#### Opções de volta")
         if "retornos" in st.session_state and not st.session_state["retornos"].empty:
@@ -2281,7 +2352,17 @@ if rank:
                         f"Total da viagem selecionada (ida + volta): **{brl(total_viagem)}**"
                     )
         else:
-            st.caption("Não foram encontradas opções de volta para as datas pesquisadas.")
+            erros_ret = st.session_state.get("_erros_retorno", [])
+            sem_token_ret = st.session_state.get("_datas_sem_token_retorno", [])
+
+            if erros_ret or sem_token_ret:
+                st.warning(
+                    "Não foi possível carregar as opções de volta nesta tentativa. "
+                    "Isso é uma falha de consulta, não significa que não existam voos. "
+                    "Clique em “Pesquisar passagens” novamente."
+                )
+            else:
+                st.caption("Não foram encontradas opções de volta para as datas pesquisadas.")
     else:
         st.dataframe(
             df_ida,
