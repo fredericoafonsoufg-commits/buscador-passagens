@@ -1,5 +1,5 @@
- 
-import os, json, hashlib, statistics, hmac
+
+import os, json, hashlib, statistics, hmac, time
 from urllib.parse import quote
 from datetime import date, timedelta, datetime
 from zoneinfo import ZoneInfo
@@ -258,32 +258,103 @@ CACHE_TTL_MINUTOS = 30
 
 def consulta(params):
     """
-    Reaproveita automaticamente pesquisas idênticas recentes.
-    Após CACHE_TTL_MINUTOS, faz uma nova consulta para atualizar os preços.
+    Reaproveita pesquisas recentes e tenta novamente automaticamente quando
+    a SerpApi/Google Flights falha de forma temporária.
     """
     f = CACHE_DIR / f"{cache_key(params)}.json"
+    cache_antigo = None
 
     if f.exists():
         try:
+            cache_antigo = json.loads(f.read_text(encoding="utf-8"))
             idade_segundos = datetime.now().timestamp() - f.stat().st_mtime
             if idade_segundos <= CACHE_TTL_MINUTOS * 60:
-                return json.loads(f.read_text(encoding="utf-8")), True
+                return cache_antigo, True
         except Exception:
-            pass
+            cache_antigo = None
 
-    r = requests.get(SERPAPI_URL, params=params, timeout=60)
-    if not r.ok:
-        raise RuntimeError(f"Erro SerpApi ({r.status_code}): {r.text[:400]}")
+    ultimo_erro = None
+    esperas = [0, 2, 5]
 
-    d = r.json()
-    if d.get("error"):
-        raise RuntimeError(d["error"])
+    for tentativa, espera in enumerate(esperas, 1):
+        if espera:
+            time.sleep(espera)
 
-    f.write_text(
-        json.dumps(d, ensure_ascii=False, indent=2),
-        encoding="utf-8"
+        try:
+            r = requests.get(SERPAPI_URL, params=params, timeout=(15, 70))
+
+            if r.status_code == 429:
+                ultimo_erro = RuntimeError(
+                    "Limite temporário de consultas atingido na SerpApi."
+                )
+                continue
+
+            if 500 <= r.status_code <= 599:
+                ultimo_erro = RuntimeError(
+                    f"Serviço de pesquisa temporariamente indisponível ({r.status_code})."
+                )
+                continue
+
+            if not r.ok:
+                raise RuntimeError(
+                    f"Erro SerpApi ({r.status_code}): {r.text[:300]}"
+                )
+
+            try:
+                d = r.json()
+            except Exception:
+                ultimo_erro = RuntimeError(
+                    "A pesquisa recebeu uma resposta inválida do serviço."
+                )
+                continue
+
+            erro_api = str(d.get("error") or "").strip()
+            if erro_api:
+                erro_lower = erro_api.lower()
+
+                # "Sem resultados" não é falha técnica e não deve gerar retries.
+                if (
+                    "hasn't returned any results" in erro_lower
+                    or "no results" in erro_lower
+                    or "no flights" in erro_lower
+                ):
+                    raise RuntimeError(erro_api)
+
+                # Alguns erros do Google Flights são transitórios.
+                if any(x in erro_lower for x in [
+                    "temporar", "timeout", "timed out", "try again",
+                    "unavailable", "failed", "internal"
+                ]):
+                    ultimo_erro = RuntimeError(erro_api)
+                    continue
+
+                raise RuntimeError(erro_api)
+
+            f.write_text(
+                json.dumps(d, ensure_ascii=False, indent=2),
+                encoding="utf-8"
+            )
+            return d, False
+
+        except (requests.Timeout, requests.ConnectionError) as exc:
+            ultimo_erro = RuntimeError(
+                "A conexão com o serviço de pesquisa demorou mais do que o esperado."
+            )
+            continue
+        except requests.RequestException as exc:
+            ultimo_erro = RuntimeError(
+                "Falha temporária de comunicação com o serviço de pesquisa."
+            )
+            continue
+
+    # Se uma atualização falhar, um resultado antigo da mesma consulta é
+    # melhor do que deixar a tela vazia. Ele só existe para esta chave exata.
+    if cache_antigo:
+        return cache_antigo, True
+
+    raise ultimo_erro or RuntimeError(
+        "Não foi possível consultar os voos neste momento."
     )
-    return d, False
 
 def params_base(orig, dest, ida, volta, adultos, cabine, stops):
     p = {
@@ -1811,6 +1882,16 @@ if st.button(
     disabled=not pode_pesquisar,
     width="stretch"
 ):
+    assinatura_atual = (
+        tuple(orig), tuple(dest),
+        ida0.isoformat() if ida0 else "",
+        volta0.isoformat() if volta0 else "",
+        int(adultos) if adultos else 1,
+        cab, stops
+    )
+    assinatura_anterior = st.session_state.get("_assinatura_ultima_pesquisa_valida")
+    rank_anterior = st.session_state.get("rank", []) if assinatura_anterior == assinatura_atual else []
+
     for _k in ["retornos", "retorno_sel_key", "ida_escolhida", "volta_escolhida"]:
         st.session_state.pop(_k, None)
     rows = []
@@ -1872,15 +1953,56 @@ if st.button(
 
     prog.empty()
 
+    pesquisa_ok = bool(rows)
+
     if not rows:
         if erros_reais:
-            st.error("Não foi possível concluir a pesquisa. Tente novamente em alguns instantes.")
+            erros_txt = " ".join(erros_reais).lower()
+
+            if "limite" in erros_txt or "429" in erros_txt:
+                mensagem_erro = (
+                    "O serviço de pesquisa atingiu temporariamente o limite de consultas. "
+                    "Tente novamente em alguns minutos."
+                )
+            elif "conexão" in erros_txt or "timeout" in erros_txt or "demorou" in erros_txt:
+                mensagem_erro = (
+                    "A consulta demorou mais do que o esperado. "
+                    "O sistema já tentou novamente automaticamente."
+                )
+            elif "indisponível" in erros_txt or "503" in erros_txt or "502" in erros_txt:
+                mensagem_erro = (
+                    "O serviço de pesquisa está temporariamente indisponível. "
+                    "O sistema já realizou novas tentativas automaticamente."
+                )
+            else:
+                mensagem_erro = (
+                    "Houve uma falha temporária na consulta. "
+                    "O sistema já tentou novamente automaticamente."
+                )
+
+            if rank_anterior:
+                st.warning(
+                    mensagem_erro + " Os últimos resultados válidos desta mesma pesquisa foram mantidos."
+                )
+                rows = list(rank_anterior)
+            else:
+                st.error(mensagem_erro)
         else:
             st.info("Não foram encontrados voos para os filtros e datas informados.")
 
     rows = sorted(rows, key=lambda x:(x["Preço (R$)"], x["Escalas"]))
-    st.session_state["rank"] = rows
-    st.session_state["uso"] = (novas, reap)
+
+    # Só substitui a pesquisa armazenada por vazio quando realmente não houve
+    # resultados e também não havia um resultado válido da mesma consulta.
+    if rows:
+        st.session_state["rank"] = rows
+        st.session_state["uso"] = (novas, reap)
+        if pesquisa_ok:
+            st.session_state["_assinatura_ultima_pesquisa_valida"] = assinatura_atual
+    elif assinatura_anterior != assinatura_atual:
+        st.session_state["rank"] = []
+        st.session_state["uso"] = (0, 0)
+
     st.session_state["ultima_pesquisa"] = {
         "orig": list(orig),
         "dest": list(dest),
@@ -2860,8 +2982,3 @@ if rank:
             )
         except Exception as e:
             st.warning(f"Não foi possível gerar o PDF nesta sessão: {e}")
-st.markdown("""
-<div class="fttFooter">
-Desenvolvido por Frederico Afonso Farias · © 2026 · Dados via SerpApi · Tenha uma excelente busca!
-</div>
-""",unsafe_allow_html=True)
