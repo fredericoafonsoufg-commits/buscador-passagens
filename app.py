@@ -1,10 +1,9 @@
- 
-import os, json, hashlib, statistics, hmac, time
+
+import os, json, hashlib, statistics, hmac
 from urllib.parse import quote
 from datetime import date, timedelta, datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
 import altair as alt
@@ -30,7 +29,7 @@ from reportlab.platypus import (
 
 st.set_page_config(
     page_title="Frederico Travel Tools",
-    page_icon=":airplane:",
+    page_icon="✈️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -254,111 +253,36 @@ def cache_key(params):
     raw = json.dumps(safe, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(raw.encode()).hexdigest()
 
-CACHE_TTL_MINUTOS = 24 * 60
+CACHE_TTL_MINUTOS = 120  # V16.6: cache local por 2 horas
 
 def consulta(params):
     """
-    Reaproveita pesquisas recentes e tenta novamente automaticamente quando
-    a SerpApi/Google Flights falha de forma temporária.
+    Reaproveita automaticamente pesquisas idênticas recentes.
+    Após CACHE_TTL_MINUTOS, faz uma nova consulta para atualizar os preços.
     """
     f = CACHE_DIR / f"{cache_key(params)}.json"
-    cache_antigo = None
 
     if f.exists():
         try:
-            cache_antigo = json.loads(f.read_text(encoding="utf-8"))
             idade_segundos = datetime.now().timestamp() - f.stat().st_mtime
             if idade_segundos <= CACHE_TTL_MINUTOS * 60:
-                return cache_antigo, True
+                return json.loads(f.read_text(encoding="utf-8")), True
         except Exception:
-            cache_antigo = None
+            pass
 
-    ultimo_erro = None
-    esperas = [0, 1]
+    r = requests.get(SERPAPI_URL, params=params, timeout=60)
+    if not r.ok:
+        raise RuntimeError(f"Erro SerpApi ({r.status_code}): {r.text[:400]}")
 
-    for tentativa, espera in enumerate(esperas, 1):
-        if espera:
-            time.sleep(espera)
+    d = r.json()
+    if d.get("error"):
+        raise RuntimeError(d["error"])
 
-        try:
-            r = requests.get(SERPAPI_URL, params=params, timeout=(8, 30))
-
-            if r.status_code == 429:
-                # Não repetir 429: uma nova tentativa só gastaria tempo e
-                # não recuperaria uma cota já atingida.
-                raise RuntimeError(
-                    "Limite de consultas atingido na SerpApi."
-                )
-
-            if 500 <= r.status_code <= 599:
-                ultimo_erro = RuntimeError(
-                    f"Serviço de pesquisa temporariamente indisponível ({r.status_code})."
-                )
-                continue
-
-            if not r.ok:
-                raise RuntimeError(
-                    f"Erro SerpApi ({r.status_code}): {r.text[:300]}"
-                )
-
-            try:
-                d = r.json()
-            except Exception:
-                ultimo_erro = RuntimeError(
-                    "A pesquisa recebeu uma resposta inválida do serviço."
-                )
-                continue
-
-            erro_api = str(d.get("error") or "").strip()
-            if erro_api:
-                erro_lower = erro_api.lower()
-
-                # "Sem resultados" não é falha técnica e não deve gerar retries.
-                if (
-                    "hasn't returned any results" in erro_lower
-                    or "no results" in erro_lower
-                    or "no flights" in erro_lower
-                ):
-                    raise RuntimeError(erro_api)
-
-                # Alguns erros do Google Flights são transitórios.
-                if "limit" in erro_lower or "quota" in erro_lower or "rate" in erro_lower:
-                    raise RuntimeError("Limite de consultas atingido na SerpApi.")
-
-                if any(x in erro_lower for x in [
-                    "temporar", "timeout", "timed out", "try again",
-                    "unavailable", "failed", "internal"
-                ]):
-                    ultimo_erro = RuntimeError(erro_api)
-                    continue
-
-                raise RuntimeError(erro_api)
-
-            f.write_text(
-                json.dumps(d, ensure_ascii=False, indent=2),
-                encoding="utf-8"
-            )
-            return d, False
-
-        except (requests.Timeout, requests.ConnectionError) as exc:
-            ultimo_erro = RuntimeError(
-                "A conexão com o serviço de pesquisa demorou mais do que o esperado."
-            )
-            continue
-        except requests.RequestException as exc:
-            ultimo_erro = RuntimeError(
-                "Falha temporária de comunicação com o serviço de pesquisa."
-            )
-            continue
-
-    # Se uma atualização falhar, um resultado antigo da mesma consulta é
-    # melhor do que deixar a tela vazia. Ele só existe para esta chave exata.
-    if cache_antigo:
-        return cache_antigo, True
-
-    raise ultimo_erro or RuntimeError(
-        "Não foi possível consultar os voos neste momento."
+    f.write_text(
+        json.dumps(d, ensure_ascii=False, indent=2),
+        encoding="utf-8"
     )
+    return d, False
 
 def params_base(orig, dest, ida, volta, adultos, cabine, stops):
     p = {
@@ -410,127 +334,6 @@ def summarize(x):
         "voos": " / ".join(nums),
         "token": x.get("departure_token", "")
     }
-
-def _hora_voo(valor):
-    txt = str(valor or "").strip()
-    # Aceita "29/01/2027 11:45" e também "2027-01-29 11:45".
-    if " " in txt:
-        return txt.rsplit(" ", 1)[-1][:5]
-    return txt[:5]
-
-
-def _normaliza_voos(valor):
-    return " / ".join(
-        p.strip().upper().replace("  ", " ")
-        for p in str(valor or "").split("/")
-        if p.strip()
-    )
-
-
-def mapa_precos_so_trecho(origens, destinos, datas, adultos, cabine, stops):
-    """
-    Consulta tarifas avulsas (somente ida).
-    Guarda chaves alternativas para conseguir identificar o mesmo voo mesmo
-    quando o Google Flights muda a forma de escrever o número do voo.
-    """
-    datas = sorted(set(d for d in datas if d))
-    mapa = {}
-    if not datas:
-        return mapa
-
-    def _grava(chave, preco):
-        if chave not in mapa or preco < mapa[chave]:
-            mapa[chave] = preco
-
-    pares = [
-        (o, d)
-        for o in origens
-        for d in destinos
-        if o and d and o != d
-    ]
-
-    def _consulta_data_rota(data_voo, origem_exata, destino_exato):
-        p = params_base(
-            [origem_exata], [destino_exato],
-            data_voo, None, int(adultos), cabine, stops
-        )
-        try:
-            d, _ = consulta(p)
-            return data_voo, origem_exata, destino_exato, d
-        except Exception:
-            return data_voo, origem_exata, destino_exato, None
-
-    total_jobs = max(1, len(datas) * len(pares))
-    with ThreadPoolExecutor(max_workers=min(6, total_jobs)) as executor:
-        futuros = [
-            executor.submit(_consulta_data_rota, data_voo, origem_exata, destino_exato)
-            for data_voo in datas
-            for origem_exata, destino_exato in pares
-        ]
-        for futuro in as_completed(futuros):
-            data_voo, origem_exata, destino_exato, dados = futuro.result()
-            if not dados:
-                continue
-            for item in all_items(dados):
-                s = summarize(item)
-                if not s or not isinstance(s.get("preco"), (int, float)):
-                    continue
-
-                data_txt = data_br(data_voo)
-                origem = str(s.get("origem") or "")
-                destino = str(s.get("destino") or "")
-                voos = _normaliza_voos(s.get("voos"))
-                cia = str(s.get("cias") or "").strip().upper()
-                hora = _hora_voo(s.get("saida"))
-                duracao = str(s.get("duracao") or "").strip()
-                preco = float(s["preco"])
-
-                # 1) correspondência exata pelo(s) número(s) do voo.
-                if voos:
-                    _grava(("voos", data_txt, origem, destino, voos), preco)
-
-                # 2) fallback forte: data + rota + companhia + horário + duração.
-                if hora:
-                    _grava(("hora_cia_dur", data_txt, origem, destino, hora, cia, duracao), preco)
-                    _grava(("hora_cia", data_txt, origem, destino, hora, cia), preco)
-                    _grava(("hora", data_txt, origem, destino, hora), preco)
-
-                # 3) fallback final: menor tarifa avulsa daquela rota/data.
-                _grava(("rota_data", data_txt, origem, destino), preco)
-
-    return mapa
-
-
-def preco_so_trecho(
-    mapa, data_txt, origem, destino, voos,
-    companhia=None, saida=None, duracao=None
-):
-    data_txt = str(data_txt or "")
-    origem = str(origem or "")
-    destino = str(destino or "")
-    voos_norm = _normaliza_voos(voos)
-    cia = str(companhia or "").strip().upper()
-    hora = _hora_voo(saida)
-    duracao = str(duracao or "").strip()
-
-    chaves = []
-    if voos_norm:
-        chaves.append(("voos", data_txt, origem, destino, voos_norm))
-    if hora:
-        chaves.extend([
-            ("hora_cia_dur", data_txt, origem, destino, hora, cia, duracao),
-            ("hora_cia", data_txt, origem, destino, hora, cia),
-            ("hora", data_txt, origem, destino, hora),
-        ])
-
-    for chave in chaves:
-        if chave in mapa:
-            return mapa[chave]
-
-    # Se o voo exato não existir na pesquisa avulsa, usa a menor tarifa
-    # disponível para a mesma rota e data, evitando células vazias.
-    return mapa.get(("rota_data", data_txt, origem, destino))
-
 
 def flex(d, n):
     return [d + timedelta(days=i) for i in range(-n, n+1)]
@@ -695,7 +498,7 @@ def exigir_senha():
     [data-testid="stMainMenu"] {display:none !important;}
     [data-testid="stMainBlockContainer"] {
         max-width:100% !important;
-        padding-top:3vh !important;
+        padding-top:5vh !important;
         padding-bottom:2rem !important;
     }
     .ftt-login-title{
@@ -753,6 +556,19 @@ def exigir_senha():
 
         if logo_login.exists():
             st.image(str(logo_login), width="stretch")
+
+        st.markdown(
+            '<div class="ftt-login-title">Frederico Travel Tools</div>',
+            unsafe_allow_html=True
+        )
+        st.markdown(
+            '<div class="ftt-login-sub">Planeje, compare e viaje melhor.</div>',
+            unsafe_allow_html=True
+        )
+        st.markdown(
+            '<div class="ftt-login-secure">Acesso protegido</div>',
+            unsafe_allow_html=True
+        )
 
         with st.form("login_ftt", clear_on_submit=False):
             senha_digitada = st.text_input(
@@ -1197,9 +1013,6 @@ def _pdf_money(v):
     except Exception:
         return "-"
 
-def _pdf_p(v, style):
-    return Paragraph(_pdf_safe(v), style)
-
 def _pdf_chart_history(df, preco_atual=None):
     if df is None or df.empty:
         return None
@@ -1316,37 +1129,21 @@ def gerar_relatorio_pdf(contexto):
         story.append(Paragraph(f"Menor preço encontrado: <b>{_pdf_money(menor)}</b>", body))
         story.append(Spacer(1, 2*mm))
         cols = ["Preço (R$)","Companhia(s)","Origem","Destino","Saída ida","Chegada ida","Escalas","Duração ida","Voos"]
-        mapa_pdf_ida = contexto.get("mapa_so_ida") or {}
-        header = [
-            _pdf_p("Data ida", small), _pdf_p("Orig.", small), _pdf_p("Dest.", small),
-            _pdf_p("Companhia", small), _pdf_p("Esc.", small), _pdf_p("Duração", small),
-            _pdf_p("Saída", small), _pdf_p("Chegada", small), _pdf_p("Voo(s)", small),
-            _pdf_p("Só ida", small), _pdf_p("Total ida+volta", small)
-        ]
+        header = ["Preço","Companhia","Orig.","Dest.","Saída","Chegada","Esc.","Duração","Voo(s)"]
         rows_pdf = [header]
         for x in voos[:12]:
-            preco_so_ida_pdf = preco_so_trecho(
-                mapa_pdf_ida, x.get("Ida"), x.get("Origem"), x.get("Destino"), x.get("Voos"),
-                x.get("Companhia(s)"), x.get("Saída ida"), x.get("Duração ida")
-            )
             rows_pdf.append([
-                _pdf_p(x.get("Ida"), small),
-                _pdf_p(x.get("Origem"), small),
-                _pdf_p(x.get("Destino"), small),
-                _pdf_p(x.get("Companhia(s)"), small),
-                _pdf_p(x.get("Escalas"), small),
-                _pdf_p(x.get("Duração ida"), small),
-                _pdf_p(x.get("Saída ida"), small),
-                _pdf_p(x.get("Chegada ida"), small),
-                _pdf_p(x.get("Voos"), small),
-                _pdf_p(_pdf_money(preco_so_ida_pdf) if preco_so_ida_pdf is not None else "—", small),
-                _pdf_p(_pdf_money(x.get("Preço (R$)")), small),
+                _pdf_money(x.get("Preço (R$)")),
+                _pdf_safe(x.get("Companhia(s)")),
+                _pdf_safe(x.get("Origem")),
+                _pdf_safe(x.get("Destino")),
+                _pdf_safe(x.get("Saída ida")),
+                _pdf_safe(x.get("Chegada ida")),
+                _pdf_safe(x.get("Escalas")),
+                _pdf_safe(x.get("Duração ida")),
+                _pdf_safe(x.get("Voos")),
             ])
-        tab = Table(
-            rows_pdf, repeatRows=1,
-            colWidths=[16*mm,9*mm,9*mm,19*mm,8*mm,16*mm,22*mm,22*mm,22*mm,16*mm,19*mm],
-            hAlign="LEFT"
-        )
+        tab = Table(rows_pdf, repeatRows=1, colWidths=[19*mm,27*mm,12*mm,12*mm,28*mm,28*mm,10*mm,19*mm,24*mm])
         tab.setStyle(TableStyle([
             ("BACKGROUND",(0,0),(-1,0),navy),("TEXTCOLOR",(0,0),(-1,0),colors.white),
             ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),
@@ -1358,59 +1155,6 @@ def gerar_relatorio_pdf(contexto):
             ("TOPPADDING",(0,0),(-1,-1),4),("BOTTOMPADDING",(0,0),(-1,-1),4),
         ]))
         story.append(tab)
-
-        retornos_pdf = contexto.get("retornos")
-        if retornos_pdf is not None and isinstance(retornos_pdf, pd.DataFrame) and not retornos_pdf.empty:
-            story.append(Spacer(1, 4*mm))
-            story.append(Paragraph("Opções de volta", h2))
-            mapa_pdf_volta = {}
-
-            ret_header = [
-                _pdf_p("Data volta", small), _pdf_p("Orig.", small), _pdf_p("Dest.", small),
-                _pdf_p("Companhia", small), _pdf_p("Esc.", small), _pdf_p("Duração", small),
-                _pdf_p("Saída", small), _pdf_p("Chegada", small), _pdf_p("Voo(s)", small),
-                _pdf_p("Só volta", small), _pdf_p("Total ida+volta", small)
-            ]
-            ret_rows = [ret_header]
-            for _, r in retornos_pdf.drop(columns=["_data_principal"], errors="ignore").head(12).iterrows():
-                preco_so_volta_pdf = preco_so_trecho(
-                    mapa_pdf_volta, r.get("Data volta"), r.get("Origem"),
-                    r.get("Destino"), r.get("Voos"),
-                    r.get("Companhia(s)"), r.get("Saída"), r.get("Duração")
-                )
-                ret_rows.append([
-                    _pdf_p(r.get("Data volta"), small),
-                    _pdf_p(r.get("Origem"), small),
-                    _pdf_p(r.get("Destino"), small),
-                    _pdf_p(r.get("Companhia(s)"), small),
-                    _pdf_p(r.get("Escalas"), small),
-                    _pdf_p(r.get("Duração"), small),
-                    _pdf_p(r.get("Saída"), small),
-                    _pdf_p(r.get("Chegada"), small),
-                    _pdf_p(r.get("Voos"), small),
-                    _pdf_p(_pdf_money(preco_so_volta_pdf) if preco_so_volta_pdf is not None else "—", small),
-                    _pdf_p(_pdf_money(r.get("Preço total (R$)")), small),
-                ])
-
-            ret_tab = Table(
-                ret_rows, repeatRows=1,
-                colWidths=[16*mm,9*mm,9*mm,19*mm,8*mm,16*mm,22*mm,22*mm,22*mm,16*mm,19*mm],
-                hAlign="LEFT"
-            )
-            ret_tab.setStyle(TableStyle([
-                ("BACKGROUND",(0,0),(-1,0),navy),
-                ("TEXTCOLOR",(0,0),(-1,0),colors.white),
-                ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),
-                ("GRID",(0,0),(-1,-1),.3,line),
-                ("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white, light]),
-                ("FONTSIZE",(0,0),(-1,-1),5.5),
-                ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
-                ("LEFTPADDING",(0,0),(-1,-1),2),
-                ("RIGHTPADDING",(0,0),(-1,-1),2),
-                ("TOPPADDING",(0,0),(-1,-1),3),
-                ("BOTTOMPADDING",(0,0),(-1,-1),3),
-            ]))
-            story.append(ret_tab)
     else:
         story.append(Paragraph("Nenhuma pesquisa de voo foi executada nesta sessão.", body))
 
@@ -1422,24 +1166,20 @@ def gerar_relatorio_pdf(contexto):
 
         if ida_sel:
             ida_rows = [
-                [_pdf_p(x, small) for x in ["Trecho","Data","Origem","Destino","Companhia","Saída","Chegada","Duração","Voo(s)"]],
+                ["Trecho","Data","Origem","Destino","Companhia","Saída","Chegada","Duração","Voo(s)"],
                 [
-                    _pdf_p("Ida", small),
-                    _pdf_p(ida_sel.get("Ida"), small),
-                    _pdf_p(ida_sel.get("Origem"), small),
-                    _pdf_p(ida_sel.get("Destino"), small),
-                    _pdf_p(ida_sel.get("Companhia(s)"), small),
-                    _pdf_p(ida_sel.get("Saída ida"), small),
-                    _pdf_p(ida_sel.get("Chegada ida"), small),
-                    _pdf_p(ida_sel.get("Duração ida"), small),
-                    _pdf_p(ida_sel.get("Voos"), small),
+                    "Ida",
+                    _pdf_safe(ida_sel.get("Ida")),
+                    _pdf_safe(ida_sel.get("Origem")),
+                    _pdf_safe(ida_sel.get("Destino")),
+                    _pdf_safe(ida_sel.get("Companhia(s)")),
+                    _pdf_safe(ida_sel.get("Saída ida")),
+                    _pdf_safe(ida_sel.get("Chegada ida")),
+                    _pdf_safe(ida_sel.get("Duração ida")),
+                    _pdf_safe(ida_sel.get("Voos")),
                 ]
             ]
-            ida_tab = Table(
-                ida_rows,
-                colWidths=[11*mm,18*mm,11*mm,11*mm,24*mm,27*mm,27*mm,18*mm,25*mm],
-                hAlign="LEFT"
-            )
+            ida_tab = Table(ida_rows, colWidths=[11*mm,19*mm,12*mm,12*mm,27*mm,27*mm,27*mm,18*mm,22*mm])
             ida_tab.setStyle(TableStyle([
                 ("BACKGROUND",(0,0),(-1,0),navy),("TEXTCOLOR",(0,0),(-1,0),colors.white),
                 ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),
@@ -1452,24 +1192,20 @@ def gerar_relatorio_pdf(contexto):
 
         if volta_sel:
             volta_rows = [
-                [_pdf_p(x, small) for x in ["Trecho","Data","Origem","Destino","Companhia","Saída","Chegada","Duração","Voo(s)"]],
+                ["Trecho","Data","Origem","Destino","Companhia","Saída","Chegada","Duração","Voo(s)"],
                 [
-                    _pdf_p("Volta", small),
-                    _pdf_p(volta_sel.get("Data volta"), small),
-                    _pdf_p(volta_sel.get("Origem"), small),
-                    _pdf_p(volta_sel.get("Destino"), small),
-                    _pdf_p(volta_sel.get("Companhia(s)"), small),
-                    _pdf_p(volta_sel.get("Saída"), small),
-                    _pdf_p(volta_sel.get("Chegada"), small),
-                    _pdf_p(volta_sel.get("Duração"), small),
-                    _pdf_p(volta_sel.get("Voos"), small),
+                    "Volta",
+                    _pdf_safe(volta_sel.get("Data volta")),
+                    _pdf_safe(volta_sel.get("Origem")),
+                    _pdf_safe(volta_sel.get("Destino")),
+                    _pdf_safe(volta_sel.get("Companhia(s)")),
+                    _pdf_safe(volta_sel.get("Saída")),
+                    _pdf_safe(volta_sel.get("Chegada")),
+                    _pdf_safe(volta_sel.get("Duração")),
+                    _pdf_safe(volta_sel.get("Voos")),
                 ]
             ]
-            volta_tab = Table(
-                volta_rows,
-                colWidths=[11*mm,18*mm,11*mm,11*mm,24*mm,27*mm,27*mm,18*mm,25*mm],
-                hAlign="LEFT"
-            )
+            volta_tab = Table(volta_rows, colWidths=[11*mm,19*mm,12*mm,12*mm,27*mm,27*mm,27*mm,18*mm,22*mm])
             volta_tab.setStyle(TableStyle([
                 ("BACKGROUND",(0,0),(-1,0),navy),("TEXTCOLOR",(0,0),(-1,0),colors.white),
                 ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),
@@ -1516,12 +1252,6 @@ def gerar_relatorio_pdf(contexto):
     if contexto.get("usar_milhas_pdf"):
         story.append(Spacer(1, 4*mm))
         story.append(Paragraph(titulo_secao("Saldos e comparação com milhas"), h2))
-        story.append(Paragraph(
-            "Dados de resgate informados pelo usuário após consulta ao programa ou a uma ferramenta externa. "
-            "Disponibilidade e taxas devem ser confirmadas antes da emissão.",
-            small
-        ))
-        story.append(Spacer(1, 2*mm))
         saldos = contexto.get("saldos", {})
         saldo_tbl = Table([
             ["LATAM Pass","Smiles","Azul Fidelidade"],
@@ -1538,25 +1268,28 @@ def gerar_relatorio_pdf(contexto):
 
         comp = contexto.get("ranking_milhas")
         if comp is not None and not comp.empty:
-            headers = ["Posição","Opção","Você paga","Milhas usadas","Milhas faltam","Saldo depois"]
-            rows_comp = [[_pdf_p(h, small) for h in headers]]
+            headers = list(comp.columns)
+            rows_comp = [headers]
             for _, r in comp.iterrows():
-                rows_comp.append([
-                    _pdf_p(r.get("Posição"), small),
-                    _pdf_p(r.get("Opção"), small),
-                    _pdf_p(_pdf_money(r.get("Desembolso imediato")), small),
-                    _pdf_p("—" if not r.get("Milhas exigidas") else pts(r.get("Milhas exigidas")), small),
-                    _pdf_p("—" if not r.get("Milhas exigidas") else pts(r.get("Milhas faltantes")), small),
-                    _pdf_p("—" if not r.get("Milhas exigidas") else pts(r.get("Saldo após emissão")), small),
-                ])
-            widths = [16*mm,38*mm,30*mm,31*mm,31*mm,31*mm]
-            ct = Table(rows_comp, repeatRows=1, colWidths=widths, hAlign="LEFT")
+                row = []
+                for c in headers:
+                    v = r[c]
+                    if c in ("Desembolso imediato","Custo econômico"):
+                        row.append(_pdf_money(v))
+                    elif "Milhas" in c or "Saldo" in c:
+                        try: row.append(pts(v))
+                        except: row.append(_pdf_safe(v))
+                    else:
+                        row.append(_pdf_safe(v))
+                rows_comp.append(row)
+            widths = [16*mm,44*mm,34*mm,34*mm,29*mm,29*mm,29*mm][:len(headers)]
+            ct = Table(rows_comp, repeatRows=1, colWidths=widths)
             ct.setStyle(TableStyle([
                 ("BACKGROUND",(0,0),(-1,0),navy),("TEXTCOLOR",(0,0),(-1,0),colors.white),
                 ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),
                 ("GRID",(0,0),(-1,-1),.3,line),
                 ("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white, light]),
-                ("FONTSIZE",(0,0),(-1,-1),6.2),
+                ("FONTSIZE",(0,0),(-1,-1),7.2),
                 ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
                 ("LEFTPADDING",(0,0),(-1,-1),4),("RIGHTPADDING",(0,0),(-1,-1),4),
                 ("TOPPADDING",(0,0),(-1,-1),5),("BOTTOMPADDING",(0,0),(-1,-1),5),
@@ -1569,29 +1302,20 @@ def gerar_relatorio_pdf(contexto):
         story.append(Spacer(1, 5*mm))
         story.append(Paragraph(titulo_secao("Tabela fixa aplicável"), h2))
         fixa_rows = [
-            [_pdf_p("Programa", body), _pdf_p(fixa.get("programa","-"), body),
-             _pdf_p("Rota", body), _pdf_p(fixa.get("rota","-"), body)],
-            [_pdf_p("Cabine", body), _pdf_p(fixa.get("cabine","-"), body),
-             _pdf_p("Milhas por trecho", body), _pdf_p(pts(fixa.get("milhas_trecho",0)), body)],
-            [_pdf_p("Total estimado", body), _pdf_p(pts(fixa.get("total",0)), body),
-             _pdf_p("Milhas faltantes", body), _pdf_p(pts(fixa.get("faltantes",0)), body)],
-            [_pdf_p("Preço máximo do milheiro", body),
-             _pdf_p(_pdf_money(fixa.get("max_milheiro",0)) + " / 1.000", body),
-             _pdf_p("Disponibilidade", body),
-             _pdf_p(fixa.get("disponibilidade","-"), body)],
+            ["Programa", fixa.get("programa","-"), "Rota", fixa.get("rota","-")],
+            ["Cabine", fixa.get("cabine","-"), "Milhas por trecho", pts(fixa.get("milhas_trecho",0))],
+            ["Total estimado", pts(fixa.get("total",0)), "Milhas faltantes", pts(fixa.get("faltantes",0))],
+            ["Preço máximo do milheiro", _pdf_money(fixa.get("max_milheiro",0)) + " / 1.000",
+             "Disponibilidade", fixa.get("disponibilidade","-")],
         ]
-        ft = Table(
-            fixa_rows,
-            colWidths=[43*mm,47*mm,43*mm,47*mm],
-            hAlign="LEFT"
-        )
+        ft = Table(fixa_rows, colWidths=[34*mm,56*mm,40*mm,50*mm])
         ft.setStyle(TableStyle([
             ("BOX",(0,0),(-1,-1),.5,line),("INNERGRID",(0,0),(-1,-1),.3,line),
             ("ROWBACKGROUNDS",(0,0),(-1,-1),[colors.white, light]),
             ("FONTNAME",(0,0),(0,-1),"Helvetica-Bold"),
             ("FONTNAME",(2,0),(2,-1),"Helvetica-Bold"),
             ("TEXTCOLOR",(0,0),(0,-1),navy),("TEXTCOLOR",(2,0),(2,-1),navy),
-            ("FONTSIZE",(0,0),(-1,-1),7.2),
+            ("FONTSIZE",(0,0),(-1,-1),8.2),
             ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
             ("TOPPADDING",(0,0),(-1,-1),6),("BOTTOMPADDING",(0,0),(-1,-1),6),
         ]))
@@ -1854,33 +1578,33 @@ if not campos_prontos:
     ]:
         st.session_state.pop(_k, None)
 
-comb = []
+comb_todas = []
 if ida0 and fi is not None and adultos and cab is not None and stops is not None:
     if tipo_viagem == "Ida e volta":
         if volta0 and fv is not None:
-            # Modo econômico:
-            # 1) combinação principal;
-            # 2) datas flexíveis da ida mantendo a volta principal;
-            # 3) datas flexíveis da volta mantendo a ida principal.
-            # Evita o produto cartesiano (ex.: ±7 x ±7 = centenas de chamadas).
-            comb = [(ida0, volta0)]
-
-            for i in flex(ida0, fi):
-                if i != ida0 and volta0 > i:
-                    comb.append((i, volta0))
-
-            for v in flex(volta0, fv):
-                if v != volta0 and v > ida0:
-                    comb.append((ida0, v))
-
-            # Remove duplicidades preservando a prioridade.
-            _vistos_comb = set()
-            comb = [
-                par for par in comb
-                if not (par in _vistos_comb or _vistos_comb.add(par))
-            ]
+            comb_todas = [(i, v) for i in flex(ida0, fi) for v in flex(volta0, fv) if v > i]
     elif tipo_viagem == "Só ida":
-        comb = [(i, None) for i in flex(ida0, fi)]
+        comb_todas = [(i, None) for i in flex(ida0, fi)]
+
+# V16.6 — proteção da franquia SerpApi.
+# As combinações mais próximas das datas escolhidas são consultadas primeiro.
+def _distancia_datas(par):
+    i, v = par
+    di = abs((i - ida0).days) if ida0 else 0
+    dv = abs((v - volta0).days) if (v is not None and volta0) else 0
+    return (di + dv, max(di, dv), di, dv)
+
+limite_consultas = st.selectbox(
+    "Máximo de combinações por pesquisa",
+    [5, 10, 20, 30, 50],
+    index=1,
+    help=("Protege sua franquia da SerpApi. O sistema prioriza as datas mais "
+          "próximas das datas escolhidas. Resultados idênticos em cache não "
+          "consomem uma nova consulta."),
+    key=f"limite_consultas_{vpesq}"
+)
+comb_todas = sorted(comb_todas, key=_distancia_datas)
+comb = comb_todas[:int(limite_consultas)]
 
 
 
@@ -1900,6 +1624,17 @@ pode_pesquisar = bool(orig and dest and comb and tipo_viagem and adultos and cab
 
 if not pode_pesquisar:
     st.caption("Preencha os dados da viagem no menu lateral para pesquisar.")
+elif comb_todas:
+    total_possivel = len(comb_todas)
+    total_programado = len(comb)
+    if total_possivel > total_programado:
+        st.info(
+            f"Modo econômico: sua flexibilidade gera {total_possivel} combinações de datas. "
+            f"Nesta pesquisa serão verificadas até {total_programado}, priorizando as mais "
+            f"próximas das datas escolhidas."
+        )
+    else:
+        st.caption(f"Esta pesquisa verificará até {total_programado} combinação(ões) de datas.")
 
 if st.button(
     "Pesquisar passagens",
@@ -1907,64 +1642,21 @@ if st.button(
     disabled=not pode_pesquisar,
     width="stretch"
 ):
-    assinatura_atual = (
-        tuple(orig), tuple(dest),
-        ida0.isoformat() if ida0 else "",
-        volta0.isoformat() if volta0 else "",
-        int(adultos) if adultos else 1,
-        cab, stops
-    )
-    assinatura_anterior = st.session_state.get("_assinatura_ultima_pesquisa_valida")
-    rank_anterior = st.session_state.get("rank", []) if assinatura_anterior == assinatura_atual else []
-
-    for _k in [
-        "retornos", "retorno_sel_key", "ida_escolhida", "volta_escolhida",
-        "_erros_retorno", "_datas_sem_token_retorno",
-        "_chave_precos_avulsos", "_preco_so_ida_sel", "_preco_so_volta_sel"
-    ]:
+    for _k in ["retornos", "retorno_sel_key", "ida_escolhida", "volta_escolhida"]:
         st.session_state.pop(_k, None)
     rows = []
-    novas = reap = 0
-    status_busca = st.empty()
-    status_busca.info(
-        f"Pesquisando {len(comb)} combinação(ões) priorizadas de datas..."
-    )
+    novas = reap = falhas = 0
     prog = st.progress(0)
-    erros_reais = []
 
-    def _buscar_combinacao(par):
-        ida, volta = par
-        p = params_base(orig, dest, ida, volta, int(adultos), cab, stops)
+    for idx, (ida, volta) in enumerate(comb, 1):
         try:
+            p = params_base(orig, dest, ida, volta, int(adultos), cab, stops)
             d, cached = consulta(p)
-            return ida, volta, p, d, cached, None
-        except Exception as exc:
-            return ida, volta, p, None, False, exc
-
-    max_workers = min(9, max(1, len(comb)))
-    concluidas = 0
-
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futuros = [executor.submit(_buscar_combinacao, par) for par in comb]
-
-        for futuro in as_completed(futuros):
-            ida, volta, p, d, cached, erro = futuro.result()
-            concluidas += 1
-            prog.progress(concluidas / len(comb))
-            status_busca.info(
-                f"Pesquisando voos... {concluidas} de {len(comb)} combinação(ões) concluída(s)."
-            )
-
-            if erro is not None:
-                msg = str(erro)
-                # Ausência de voos em uma combinação de datas não é erro para o usuário.
-                if "hasn't returned any results" not in msg.lower() and "no results" not in msg.lower():
-                    erros_reais.append(msg)
-                continue
-
             reap += int(cached)
             novas += int(not cached)
 
+            # Guarda o histórico de preços retornado pela pesquisa para que o gráfico
+            # de 30/60 dias possa ser atualizado apenas clicando no período.
             if isinstance(d, dict) and d.get("price_insights"):
                 st.session_state["price_insights_raw"] = d.get("price_insights") or {}
 
@@ -1986,60 +1678,21 @@ if st.button(
                         "_token": s["token"],
                         "_params": p
                     })
+        except Exception as e:
+            falhas += 1
+            msg = str(e)
+            # Se a cota/rate limit acabou, insistir nas demais combinações só gera
+            # chamadas inúteis. Interrompe imediatamente e informa uma única vez.
+            if "(429)" in msg or "limit" in msg.lower() or "quota" in msg.lower() or "out of searches" in msg.lower():
+                st.error("A SerpApi atingiu o limite disponível. A pesquisa foi interrompida para evitar novas tentativas desnecessárias.")
+                break
+            st.warning(msg)
 
-    prog.empty()
-    status_busca.empty()
-
-    pesquisa_ok = bool(rows)
-
-    if not rows:
-        if erros_reais:
-            erros_txt = " ".join(erros_reais).lower()
-
-            if "limite" in erros_txt or "429" in erros_txt:
-                mensagem_erro = (
-                    "O serviço de pesquisa atingiu temporariamente o limite de consultas. "
-                    "Tente novamente em alguns minutos."
-                )
-            elif "conexão" in erros_txt or "timeout" in erros_txt or "demorou" in erros_txt:
-                mensagem_erro = (
-                    "A consulta demorou mais do que o esperado. "
-                    "O sistema já tentou novamente automaticamente."
-                )
-            elif "indisponível" in erros_txt or "503" in erros_txt or "502" in erros_txt:
-                mensagem_erro = (
-                    "O serviço de pesquisa está temporariamente indisponível. "
-                    "O sistema já realizou novas tentativas automaticamente."
-                )
-            else:
-                mensagem_erro = (
-                    "Houve uma falha temporária na consulta. "
-                    "O sistema já tentou novamente automaticamente."
-                )
-
-            if rank_anterior:
-                st.warning(
-                    mensagem_erro + " Os últimos resultados válidos desta mesma pesquisa foram mantidos."
-                )
-                rows = list(rank_anterior)
-            else:
-                st.error(mensagem_erro)
-        else:
-            st.info("Não foram encontrados voos para os filtros e datas informados.")
+        prog.progress(idx / len(comb))
 
     rows = sorted(rows, key=lambda x:(x["Preço (R$)"], x["Escalas"]))
-
-    # Só substitui a pesquisa armazenada por vazio quando realmente não houve
-    # resultados e também não havia um resultado válido da mesma consulta.
-    if rows:
-        st.session_state["rank"] = rows
-        st.session_state["uso"] = (novas, reap)
-        if pesquisa_ok:
-            st.session_state["_assinatura_ultima_pesquisa_valida"] = assinatura_atual
-    elif assinatura_anterior != assinatura_atual:
-        st.session_state["rank"] = []
-        st.session_state["uso"] = (0, 0)
-
+    st.session_state["rank"] = rows
+    st.session_state["uso"] = (novas, reap, falhas)
     st.session_state["ultima_pesquisa"] = {
         "orig": list(orig),
         "dest": list(dest),
@@ -2047,15 +1700,19 @@ if st.button(
         "volta": volta0,
         "adultos": int(adultos) if adultos else "-",
         "cabine": cab_pt,
-    "cabine_codigo": cab,
-    "stops_codigo": stops,
         "conexoes": stop_pt,
     }
 
 rank = st.session_state.get("rank", [])
 if rank:
-    novas, reap = st.session_state.get("uso", (0,0))
+    uso = st.session_state.get("uso", (0, 0, 0))
+    novas, reap, falhas = (list(uso) + [0, 0, 0])[:3]
     st.success(f"Foram encontradas **{len(rank)} opções**.")
+    st.caption(
+        f"Uso desta pesquisa: {novas} consulta(s) nova(s) à SerpApi · "
+        f"{reap} resultado(s) reaproveitado(s) do cache local" +
+        (f" · {falhas} falha(s)" if falhas else "")
+    )
 
     menor = rank[0]["Preço (R$)"]
     st.session_state["preco_ref"] = menor
@@ -2068,27 +1725,14 @@ if rank:
     st.metric("Menor preço encontrado", brl(menor))
 
     top = rank[:20]
-
-    # Modo econômico: não consulta automaticamente uma nova pesquisa
-    # "somente ida" para cada rota/data da tabela. Isso preserva a cota.
-    mapa_so_ida = {}
-
-    linhas_ida_tabela = []
-    for x in top:
-        linha = {k: v for k, v in x.items() if not k.startswith("_")}
-        if volta0:
-            linha["Comprando ida e volta juntas (R$)"] = linha.pop("Preço (R$)")
-        linhas_ida_tabela.append(linha)
-
-    df_ida = pd.DataFrame(linhas_ida_tabela)
+    df_ida = pd.DataFrame([
+        {k: v for k, v in x.items() if not k.startswith("_")}
+        for x in top
+    ])
 
     if volta0:
         st.markdown("#### Opções de ida")
-        st.caption(
-            "Os valores exibidos são do itinerário completo. "
-            "O preço avulso de cada trecho é consultado somente após você selecionar os voos, "
-            "para economizar consultas."
-        )
+        st.caption("Clique em uma linha para escolher o voo de ida.")
 
         evento_ida = st.dataframe(
             df_ida,
@@ -2098,142 +1742,35 @@ if rank:
             selection_mode="single-row",
             key="tabela_voos_ida",
             column_config={
-                "Comprando ida e volta juntas (R$)": st.column_config.NumberColumn(format="R$ %.2f")
+                "Preço (R$)": st.column_config.NumberColumn(format="R$ %.2f")
             }
         )
 
         linhas_ida = list(evento_ida.selection.rows) if evento_ida else []
+
         if linhas_ida:
             idx_ida = int(linhas_ida[0])
-            st.session_state["ida_escolhida"] = top[idx_ida]
+            sel = top[idx_ida]
 
-        # As opções de volta ficam visíveis sem exigir clique na ida.
-        # Por padrão, priorizamos exatamente as datas principais escolhidas
-        # pelo usuário, mesmo quando há flexibilidade de ± dias.
-        if st.session_state.get("ida_escolhida") in top:
-            sel_retorno = st.session_state.get("ida_escolhida")
-        else:
-            data_ida_principal = data_br(ida0)
-            data_volta_principal = data_br(volta0)
+            retorno_key = (
+                f"{sel.get('_token','')}|{sel.get('Ida','')}|"
+                f"{sel.get('Volta','')}|{idx_ida}"
+            )
 
-            candidatos_exatos = [
-                x for x in rank
-                if x.get("Ida") == data_ida_principal
-                and x.get("Volta") == data_volta_principal
-            ]
-
-            # Se por algum motivo não houver a combinação exata da ida,
-            # ainda prioriza a data de volta escolhida.
-            if candidatos_exatos:
-                sel_retorno = sorted(
-                    candidatos_exatos,
-                    key=lambda x: (x["Preço (R$)"], x["Escalas"])
-                )[0]
-            else:
-                candidatos_volta = [
-                    x for x in rank
-                    if x.get("Volta") == data_volta_principal
-                ]
-                sel_retorno = (
-                    sorted(
-                        candidatos_volta,
-                        key=lambda x: (x["Preço (R$)"], x["Escalas"])
-                    )[0]
-                    if candidatos_volta
-                    else top[0]
-                )
-
-        datas_volta_busca = [
-            d for d in flex(volta0, fv)
-            if d > datetime.strptime(sel_retorno["Ida"], "%d/%m/%Y").date()
-        ]
-
-        retorno_key = (
-            f"{sel_retorno.get('_token','')}|{sel_retorno.get('Ida','')}|"
-            f"{','.join(d.isoformat() for d in datas_volta_busca)}"
-        )
-
-        if st.session_state.get("retorno_sel_key") != retorno_key:
-            rr = []
-            erros_retorno = []
-            datas_sem_token = []
-
-            def _candidato_ida_para_data(data_retorno):
-                data_txt = data_br(data_retorno)
-
-                # O departure_token só é válido para a mesma combinação de
-                # datas em que foi gerado. Procuramos o MESMO voo de ida
-                # dentro da combinação correspondente à data de volta.
-                mesmos_voos = [
-                    x for x in rank
-                    if x.get("Volta") == data_txt
-                    and x.get("Origem") == sel_retorno.get("Origem")
-                    and x.get("Destino") == sel_retorno.get("Destino")
-                    and x.get("Voos") == sel_retorno.get("Voos")
-                    and x.get("Saída ida") == sel_retorno.get("Saída ida")
-                ]
-
-                if mesmos_voos:
-                    return sorted(
-                        mesmos_voos,
-                        key=lambda x: (x["Preço (R$)"], x["Escalas"])
-                    )[0]
-
-                # Fallback: mesmo voo identificado por horário/companhia,
-                # caso a numeração venha escrita de maneira diferente.
-                mesma_saida = [
-                    x for x in rank
-                    if x.get("Volta") == data_txt
-                    and x.get("Origem") == sel_retorno.get("Origem")
-                    and x.get("Destino") == sel_retorno.get("Destino")
-                    and x.get("Saída ida") == sel_retorno.get("Saída ida")
-                    and x.get("Companhia(s)") == sel_retorno.get("Companhia(s)")
-                ]
-                if mesma_saida:
-                    return sorted(
-                        mesma_saida,
-                        key=lambda x: (x["Preço (R$)"], x["Escalas"])
-                    )[0]
-
-                return None
-
-            def _buscar_retorno_data(data_retorno):
-                candidato_data = _candidato_ida_para_data(data_retorno)
-                if not candidato_data:
-                    return data_retorno, None, "sem_token_compativel"
-
-                p_ret = dict(candidato_data["_params"])
-                p_ret["departure_token"] = candidato_data["_token"]
+            if st.session_state.get("retorno_sel_key") != retorno_key:
+                p_retorno = dict(sel["_params"])
+                p_retorno["departure_token"] = sel["_token"]
 
                 try:
-                    d_ret, _ = consulta(p_ret)
-                    return data_retorno, d_ret, None
-                except Exception as exc:
-                    return data_retorno, None, exc
-
-            with ThreadPoolExecutor(max_workers=min(4, max(1, len(datas_volta_busca)))) as executor:
-                futuros_ret = [
-                    executor.submit(_buscar_retorno_data, d)
-                    for d in datas_volta_busca
-                ]
-
-                for futuro in as_completed(futuros_ret):
-                    data_retorno, d_retorno, erro_retorno = futuro.result()
-                    if erro_retorno == "sem_token_compativel":
-                        datas_sem_token.append(data_retorno)
-                        continue
-                    if erro_retorno is not None:
-                        erros_retorno.append(str(erro_retorno))
-                        continue
-                    if not d_retorno:
-                        continue
+                    d_retorno, _ = consulta(p_retorno)
+                    rr = []
 
                     for item in all_items(d_retorno):
                         s = summarize(item)
                         if s:
                             rr.append({
                                 "Preço total (R$)": s["preco"],
-                                "Data volta": data_br(data_retorno),
+                                "Data volta": sel["Volta"],
                                 "Origem": s["origem"],
                                 "Destino": s["destino"],
                                 "Companhia(s)": s["cias"],
@@ -2241,192 +1778,53 @@ if rank:
                                 "Duração": s["duracao"],
                                 "Saída": data_br(s["saida"]),
                                 "Chegada": data_br(s["chegada"]),
-                                "Voos": s["voos"],
-                                "_data_principal": data_retorno == volta0
+                                "Voos": s["voos"]
                             })
 
-            if rr:
-                df_retorno = pd.DataFrame(rr)
-                df_retorno["Preço total (R$)"] = pd.to_numeric(
-                    df_retorno["Preço total (R$)"],
-                    errors="coerce"
-                )
-                df_retorno = df_retorno.sort_values(
-                    ["Preço total (R$)", "Data volta", "Saída"],
-                    na_position="last"
-                ).reset_index(drop=True)
-                st.session_state["retornos"] = df_retorno
-            else:
-                st.session_state.pop("retornos", None)
-
-            st.session_state["retorno_sel_key"] = retorno_key
-            st.session_state["_erros_retorno"] = erros_retorno
-            st.session_state["_datas_sem_token_retorno"] = datas_sem_token
-
-        st.markdown("#### Opções de volta")
-        if "retornos" in st.session_state and not st.session_state["retornos"].empty:
-            if fv:
-                datas_txt = ", ".join(data_br(d) for d in flex(volta0, fv))
-                st.caption(
-                    f"Datas pesquisadas para a volta: {datas_txt}. "
-                    f"A data principal é {data_br(volta0)}. "
-                    "Os preços avulsos dos trechos são consultados apenas depois da seleção."
-                )
-            else:
-                st.caption(f"Data da volta: {data_br(volta0)}.")
-
-            df_volta_visivel = st.session_state["retornos"].drop(
-                columns=["_data_principal"],
-                errors="ignore"
-            ).copy()
-
-            df_volta_visivel = df_volta_visivel.rename(
-                columns={"Preço total (R$)": "Comprando ida e volta juntas (R$)"}
-            )
-            ordem_volta = [
-                "Data volta", "Origem", "Destino", "Companhia(s)", "Escalas",
-                "Duração", "Saída", "Chegada", "Voos",
-                "Comprando ida e volta juntas (R$)"
-            ]
-            df_volta_visivel = df_volta_visivel[
-                [c for c in ordem_volta if c in df_volta_visivel.columns]
-            ]
-
-            evento_volta = st.dataframe(
-                df_volta_visivel,
-                width="stretch",
-                hide_index=True,
-                on_select="rerun",
-                selection_mode="single-row",
-                key="tabela_voos_volta",
-                column_config={
-                    "Comprando ida e volta juntas (R$)": st.column_config.NumberColumn(format="R$ %.2f")
-                }
-            )
-
-            linhas_volta = list(evento_volta.selection.rows) if evento_volta else []
-            if linhas_volta:
-                idx_volta = int(linhas_volta[0])
-                volta_escolhida = st.session_state["retornos"].iloc[idx_volta].to_dict()
-                st.session_state["volta_escolhida"] = volta_escolhida
-
-                # Na resposta de seleção da volta, "Preço total (R$)" representa
-                # o valor final do itinerário completo (ida + volta), e não
-                # somente o trecho de retorno.
-                total_selecionado = float(volta_escolhida.get("Preço total (R$)") or 0)
-                if total_selecionado > 0:
-                    st.session_state["preco_ref"] = total_selecionado
-
-            ida_sel_atual = st.session_state.get("ida_escolhida")
-            volta_sel_atual = st.session_state.get("volta_escolhida")
-            if ida_sel_atual and volta_sel_atual:
-                total_viagem = float(volta_sel_atual.get("Preço total (R$)") or 0)
-
-                chave_avulsa = (
-                    ida_sel_atual.get("Ida"), ida_sel_atual.get("Origem"),
-                    ida_sel_atual.get("Destino"), ida_sel_atual.get("Voos"),
-                    volta_sel_atual.get("Data volta"), volta_sel_atual.get("Origem"),
-                    volta_sel_atual.get("Destino"), volta_sel_atual.get("Voos")
-                )
-
-                if st.session_state.get("_chave_precos_avulsos") != chave_avulsa:
-                    preco_so_ida_sel = None
-                    preco_so_volta_sel = None
-
-                    try:
-                        data_ida_sel = datetime.strptime(
-                            ida_sel_atual.get("Ida"), "%d/%m/%Y"
-                        ).date()
-                        mapa_ida_sel = mapa_precos_so_trecho(
-                            [ida_sel_atual.get("Origem")],
-                            [ida_sel_atual.get("Destino")],
-                            [data_ida_sel], adultos, cab, stops
+                    if rr:
+                        df_retorno = pd.DataFrame(rr)
+                        df_retorno["Preço total (R$)"] = pd.to_numeric(
+                            df_retorno["Preço total (R$)"],
+                            errors="coerce"
                         )
-                        preco_so_ida_sel = preco_so_trecho(
-                            mapa_ida_sel,
-                            ida_sel_atual.get("Ida"),
-                            ida_sel_atual.get("Origem"),
-                            ida_sel_atual.get("Destino"),
-                            ida_sel_atual.get("Voos"),
-                            ida_sel_atual.get("Companhia(s)"),
-                            ida_sel_atual.get("Saída ida"),
-                            ida_sel_atual.get("Duração ida")
-                        )
-                    except Exception:
-                        pass
-
-                    try:
-                        data_volta_sel = datetime.strptime(
-                            volta_sel_atual.get("Data volta"), "%d/%m/%Y"
-                        ).date()
-                        mapa_volta_sel = mapa_precos_so_trecho(
-                            [volta_sel_atual.get("Origem")],
-                            [volta_sel_atual.get("Destino")],
-                            [data_volta_sel], adultos, cab, stops
-                        )
-                        preco_so_volta_sel = preco_so_trecho(
-                            mapa_volta_sel,
-                            volta_sel_atual.get("Data volta"),
-                            volta_sel_atual.get("Origem"),
-                            volta_sel_atual.get("Destino"),
-                            volta_sel_atual.get("Voos"),
-                            volta_sel_atual.get("Companhia(s)"),
-                            volta_sel_atual.get("Saída"),
-                            volta_sel_atual.get("Duração")
-                        )
-                    except Exception:
-                        pass
-
-                    st.session_state["_preco_so_ida_sel"] = preco_so_ida_sel
-                    st.session_state["_preco_so_volta_sel"] = preco_so_volta_sel
-                    st.session_state["_chave_precos_avulsos"] = chave_avulsa
-
-                preco_so_ida_sel = st.session_state.get("_preco_so_ida_sel")
-                preco_so_volta_sel = st.session_state.get("_preco_so_volta_sel")
-
-                if total_viagem > 0:
-                    st.success(
-                        f"Comprando ida e volta juntas: **{brl(total_viagem)}**"
-                    )
-
-                if preco_so_ida_sel is not None and preco_so_volta_sel is not None:
-                    total_separado = float(preco_so_ida_sel) + float(preco_so_volta_sel)
-                    diferenca = abs(total_separado - total_viagem)
-
-                    cpre1, cpre2, cpre3 = st.columns(3)
-                    cpre1.metric("Só ida", brl(preco_so_ida_sel))
-                    cpre2.metric("Só volta", brl(preco_so_volta_sel))
-                    cpre3.metric("Separadamente", brl(total_separado))
-
-                    if total_viagem <= total_separado:
-                        st.info(
-                            f"Melhor escolha: comprar ida e volta juntas por {brl(total_viagem)}. "
-                            f"Separadamente custariam {brl(total_separado)}. "
-                            f"Economia: {brl(diferenca)}."
-                        )
+                        st.session_state["retornos"] = df_retorno.sort_values(
+                            ["Preço total (R$)", "Saída"],
+                            na_position="last"
+                        ).reset_index(drop=True)
                     else:
-                        st.info(
-                            f"Melhor escolha: comprar os trechos separadamente por {brl(total_separado)}. "
-                            f"Juntos custariam {brl(total_viagem)}. "
-                            f"Economia: {brl(diferenca)}."
-                        )
-                else:
-                    st.caption(
-                        "O total da viagem foi encontrado. Os preços avulsos não puderam ser "
-                        "consultados sem consumir novas chamadas."
+                        st.session_state.pop("retornos", None)
+
+                    st.session_state["retorno_sel_key"] = retorno_key
+                    st.session_state["ida_escolhida"] = sel
+
+                except Exception as e:
+                    st.warning(f"Não foi possível carregar as opções de volta: {e}")
+
+            if "retornos" in st.session_state:
+                st.markdown("#### Opções de volta")
+                st.caption("Clique em uma linha para escolher o voo de volta.")
+
+                evento_volta = st.dataframe(
+                    st.session_state["retornos"],
+                    width="stretch",
+                    hide_index=True,
+                    on_select="rerun",
+                    selection_mode="single-row",
+                    key="tabela_voos_volta",
+                    column_config={
+                        "Preço total (R$)": st.column_config.NumberColumn(format="R$ %.2f")
+                    }
+                )
+
+                linhas_volta = list(evento_volta.selection.rows) if evento_volta else []
+                if linhas_volta:
+                    idx_volta = int(linhas_volta[0])
+                    st.session_state["volta_escolhida"] = (
+                        st.session_state["retornos"].iloc[idx_volta].to_dict()
                     )
         else:
-            erros_ret = st.session_state.get("_erros_retorno", [])
-            sem_token_ret = st.session_state.get("_datas_sem_token_retorno", [])
+            st.caption("Selecione uma opção de ida na tabela para carregar os voos de volta.")
 
-            if erros_ret or sem_token_ret:
-                st.warning(
-                    "Não foi possível carregar as opções de volta nesta tentativa. "
-                    "Isso é uma falha de consulta, não significa que não existam voos. "
-                    "Clique em “Pesquisar passagens” novamente."
-                )
-            else:
-                st.caption("Não foram encontradas opções de volta para as datas pesquisadas.")
     else:
         st.dataframe(
             df_ida,
@@ -2561,33 +1959,6 @@ if rank:
     )
 
 if tem_milhas == "Sim":
-    st.markdown("#### Consultar disponibilidade com pontos")
-    st.caption(
-        "Consulte a disponibilidade de emissões com pontos no Seats.aero e depois informe aqui "
-        "somente os pontos e as taxas encontrados."
-    )
-
-    st.link_button(
-        "Consultar no Seats.aero",
-        "https://seats.aero/search",
-        width="stretch"
-    )
-
-    if volta0:
-        st.info(
-            f"Pesquise: {', '.join(orig)} → {', '.join(dest)} em {data_br(ida0)} "
-            f"e {', '.join(dest)} → {', '.join(orig)} em {data_br(volta0)}."
-        )
-    else:
-        st.info(
-            f"Pesquise: {', '.join(orig)} → {', '.join(dest)} em {data_br(ida0)}."
-        )
-
-    st.caption(
-        "Se o Seats.aero não mostrar disponibilidade gratuita para sua rota ou data, "
-        "continue normalmente e informe os dados encontrados diretamente no programa de milhas."
-    )
-
     programas_escolhidos = st.multiselect(
         "Quais programas você utiliza?",
         ["Smiles", "LATAM Pass", "Azul Fidelidade"],
@@ -2698,14 +2069,12 @@ def _secret_float(nome, padrao):
     except Exception:
         return float(padrao)
 
-
-
 # Dados internos usados pelo ranking. A interface só pede o necessário.
 if rank and tem_milhas == "Sim" and programas_escolhidos and preco_ref > 0:
     st.subheader("4. Comparar dinheiro × milhas")
     st.caption(
         f"Preço em dinheiro usado como referência: {brl(preco_ref)}. "
-        "Informe apenas os pontos exigidos e as taxas do resgate."
+        "Preencha apenas os dados do resgate que você encontrou no programa."
     )
 
     mapa_programas = {
@@ -2718,10 +2087,6 @@ if rank and tem_milhas == "Sim" and programas_escolhidos and preco_ref > 0:
         saldo, prefixo = mapa_programas[nome]
 
         with st.expander(f"Simular com {nome}", expanded=False):
-            st.caption(
-                "Informe os dados do resgate. Se o Seats.aero não mostrar as taxas, "
-                "confirme o valor diretamente no programa antes da emissão."
-            )
             req = st.number_input(
                 "Quantas milhas/pontos o programa está cobrando?",
                 min_value=0,
@@ -3071,8 +2436,6 @@ except Exception:
 contexto_pdf = {
     "origem": ", ".join(orig) if orig else "-",
     "destino": ", ".join(dest) if dest else "-",
-    "orig_codigos": list(orig),
-    "dest_codigos": list(dest),
     "tipo": "Ida e volta" if volta0 else "Só ida",
     "cabine": cab_pt,
     "ida": data_br(ida0) if ida0 else "-",
@@ -3082,11 +2445,7 @@ contexto_pdf = {
     "voos": [{k:v for k,v in x.items() if not k.startswith("_")} for x in rank[:20]] if rank else [],
     "ida_escolhida": st.session_state.get("ida_escolhida"),
     "volta_escolhida": st.session_state.get("volta_escolhida"),
-    "retornos": st.session_state.get("retornos"),
-    "mapa_so_ida": mapa_so_ida if "mapa_so_ida" in locals() else {},
     "preco_atual": float(st.session_state.get("preco_ref",0) or 0),
-    "preco_so_ida_sel": st.session_state.get("_preco_so_ida_sel"),
-    "preco_so_volta_sel": st.session_state.get("_preco_so_volta_sel"),
     "historico": hist_pdf,
     "usar_milhas_pdf": tem_milhas == "Sim",
     "saldos": {"LATAM Pass": lat, "Smiles": smi, "Azul Fidelidade": azu} if tem_milhas == "Sim" else {},
@@ -3105,7 +2464,7 @@ if rank:
     ">
       <div style="font-size:1.05rem;font-weight:800;color:#08224a;">Relatório completo em PDF</div>
       <div style="color:#718096;margin-top:4px;">
-        Baixe um relatório com voos, histórico de preços, comparação de milhas informadas e recomendação final.
+        Baixe um relatório completo com voos, gráficos, tabelas, comparação de milhas e recomendação final.
       </div>
     </div>
     """, unsafe_allow_html=True)
@@ -3129,3 +2488,8 @@ if rank:
             )
         except Exception as e:
             st.warning(f"Não foi possível gerar o PDF nesta sessão: {e}")
+st.markdown("""
+<div class="fttFooter">
+Desenvolvido por Frederico Afonso Farias · © 2026 · Dados via SerpApi · Tenha uma excelente busca!
+</div>
+""",unsafe_allow_html=True)
