@@ -1564,6 +1564,16 @@ with st.sidebar:
             "Até 2 conexões": 3
         }.get(stop_pt)
 
+        limite_consultas = st.selectbox(
+            "Limite de buscas por pesquisa",
+            [5, 10, 20, 30, 50],
+            index=1,
+            help=("Controla quantas combinações de datas poderão ser consultadas em uma pesquisa. "
+                  "O sistema prioriza as datas mais próximas das escolhidas e reaproveita resultados em cache."),
+            key=f"limite_consultas_{vpesq}"
+        )
+        st.caption("Use valores menores para economizar sua franquia da API.")
+
 orig = codigos(orig_txt)
 dest = codigos(dest_txt)
 
@@ -1594,15 +1604,6 @@ def _distancia_datas(par):
     dv = abs((v - volta0).days) if (v is not None and volta0) else 0
     return (di + dv, max(di, dv), di, dv)
 
-limite_consultas = st.selectbox(
-    "Máximo de combinações por pesquisa",
-    [5, 10, 20, 30, 50],
-    index=1,
-    help=("Protege sua franquia da SerpApi. O sistema prioriza as datas mais "
-          "próximas das datas escolhidas. Resultados idênticos em cache não "
-          "consomem uma nova consulta."),
-    key=f"limite_consultas_{vpesq}"
-)
 comb_todas = sorted(comb_todas, key=_distancia_datas)
 comb = comb_todas[:int(limite_consultas)]
 
@@ -1629,12 +1630,15 @@ elif comb_todas:
     total_programado = len(comb)
     if total_possivel > total_programado:
         st.info(
-            f"Modo econômico: sua flexibilidade gera {total_possivel} combinações de datas. "
-            f"Nesta pesquisa serão verificadas até {total_programado}, priorizando as mais "
-            f"próximas das datas escolhidas."
+            f"Sua flexibilidade gera {total_possivel} combinações de datas. "
+            f"Com o limite atual, esta pesquisa poderá realizar até {total_programado} buscas na API, "
+            f"priorizando as datas mais próximas das escolhidas. Resultados já disponíveis em cache são reaproveitados."
         )
     else:
-        st.caption(f"Esta pesquisa verificará até {total_programado} combinação(ões) de datas.")
+        st.info(
+            f"Esta pesquisa poderá realizar até {total_programado} busca(s) na API. "
+            "Resultados já disponíveis em cache são reaproveitados."
+        )
 
 if st.button(
     "Pesquisar passagens",
