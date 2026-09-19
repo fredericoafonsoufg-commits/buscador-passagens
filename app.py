@@ -1567,12 +1567,13 @@ with st.sidebar:
         limite_consultas = st.selectbox(
             "Limite de buscas por pesquisa",
             [5, 10, 20, 30, 50],
-            index=1,
+            index=0,
+            format_func=lambda x: "5 (Recomendado)" if x == 5 else str(x),
             help=("Controla quantas combinações de datas poderão ser consultadas em uma pesquisa. "
                   "O sistema prioriza as datas mais próximas das escolhidas e reaproveita resultados em cache."),
             key=f"limite_consultas_{vpesq}"
         )
-        st.caption("Use valores menores para economizar sua franquia da API.")
+        st.caption("5 é o valor recomendado para economizar sua franquia. Aumente apenas quando quiser ampliar a busca entre datas flexíveis.")
 
 orig = codigos(orig_txt)
 dest = codigos(dest_txt)
@@ -1596,7 +1597,7 @@ if ida0 and fi is not None and adultos and cab is not None and stops is not None
     elif tipo_viagem == "Só ida":
         comb_todas = [(i, None) for i in flex(ida0, fi)]
 
-# V16.6 — proteção da franquia SerpApi.
+# V16.8 — proteção e controle de consumo da franquia SerpApi.
 # As combinações mais próximas das datas escolhidas são consultadas primeiro.
 def _distancia_datas(par):
     i, v = par
